@@ -113,6 +113,9 @@ def state(player, bands: int = 0) -> dict:
         "volume": float(player.volume),
         "level": float(player.level),
         "backend": player.engine.backend,
+        "underruns": int(player.underruns),
+        "output_underflows": int(player.output_underflows),
+        "buffered_seconds": float(player.buffered_seconds),
         "now": {"style": now.style.to_dict(), "piece": now.piece, "bar": now.bar},
         "style": player.style.to_dict(),
     }

@@ -15,7 +15,8 @@ import threading
 from dataclasses import dataclass, field
 
 from .genres import NAMES as GENRE_NAMES, REGISTRY
-from .style import CHORD_INSTRUMENTS, DRUMS, KEYS, LEAD_INSTRUMENTS, MODES, Style
+from .style import CHORD_INSTRUMENTS, DRUMS, KEYS, LEAD_INSTRUMENTS, MODES, Style, voice_requested
+from . import voice
 
 QUIET_FLAGS = ("--no-session", "-nt", "-ns", "-np", "-nc", "--no-mcp", "--no-themes", "--no-skill-registry")
 
@@ -206,13 +207,33 @@ class GentleShell:
         """Like `interpret`, plus the tokens and cost of the call (None when Gentle Shell does not report them)."""
         cur = current.to_dict()
         cur.pop("mood", None)
+        cur.pop("voice_lines", None)
+        opted_in = voice_requested(mood)
         prompt = PROMPT.format(mood=mood, current=json.dumps(cur), keys=", ".join(KEYS), modes=", ".join(MODES),
                                chords=", ".join(CHORD_INSTRUMENTS), leads=", ".join(LEAD_INSTRUMENTS),
                                drums=", ".join(DRUMS), genre_names=", ".join(GENRE_NAMES), genres=genre_lines())
+        if opted_in:
+            prompt = prompt.replace("with exactly these fields:", "with these fields plus voice_lines:")
+            prompt += ('\nAlso include "voice_lines": exactly three thematic Spanish phrases for beginning, '
+                       'middle and end. Each is one concise sentence, at most 12 words and 160 characters, '
+                       'combining a reflective motivational idea with a concrete action related to the mood. '
+                       'Use a calm, philosophical tone, not a long speech. '
+                       'Example: "No confundas velocidad con progreso: elegí tu próximo paso." '
+                       'Return only the sentences, not stage directions or instructions to speak.\n')
         text, usage = parse_output(self._run(self.command(prompt)))
         data = extract_json(text)
         data["mood"] = mood
-        return Style.from_dict(data, current), usage
+        # Never inherit stale lines or trust unsolicited voice from the model.
+        data["voice_lines"] = data.get("voice_lines", ()) if opted_in else ()
+        style = Style.from_dict(data, current)
+        if opted_in:
+            if not style.voice_lines:
+                raise InterpretError("voice requires exactly three single-sentence phrases of 2-12 words")
+            try:
+                voice.prepare(style.voice_lines)
+            except voice.VoiceError as e:
+                raise InterpretError(str(e)) from e
+        return style, usage
 
     def list_models(self) -> list[str]:
         """`provider/model` ids Gentle Shell can use."""

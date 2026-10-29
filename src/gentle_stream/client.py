@@ -146,6 +146,10 @@ class PlayerClient:
         self.pid = state["pid"]
         self.playing, self.volume, self.level = state["playing"], state["volume"], state["level"]
         self.backend = state["backend"]
+        # Older daemons do not report diagnostics: unknown is not a zero count.
+        self.underruns = state.get("underruns")
+        self.output_underflows = state.get("output_underflows")
+        self.buffered_seconds = state.get("buffered_seconds")
         self.now = NowPlaying(Style.from_dict(now["style"]), now["piece"], now["bar"])
         self.style = Style.from_dict(state["style"])   # rendered, maybe not audible yet: the base for a mood
 

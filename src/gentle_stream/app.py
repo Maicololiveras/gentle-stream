@@ -14,15 +14,17 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.markup import escape
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.theme import Theme
-from textual.widgets import Footer, Header, Input, OptionList, Static
+from textual.widgets import Button, Footer, Header, Input, OptionList, Static, Tab, Tabs
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
 from .bridge import GentleShell, InterpretError, Usage
+from .client import PlayerError
 from .player import Player
+from .playlists import default_playlist
 from .presets import NAME_MAX, Preset, PresetError, PresetStore, normalize_name
 from .style import Style
 
@@ -180,17 +182,20 @@ class SaveDialog(ModalScreen[str | None]):
 
 
 class PresetPicker(ModalScreen[Preset | None]):
-    """Saved prompts: Enter applies the highlighted one, d deletes it, Esc closes."""
+    """Browse saved and built-in generative styles; only user saves can be deleted."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Close"),
         Binding("d,delete", "delete", "Delete"),
+        Binding("left", "switch_playlist('my-playlist')", "My playlist", priority=True),
+        Binding("right", "switch_playlist('default-playlist')", "Default playlist", priority=True),
     ]
     DEFAULT_CSS = """
     PresetPicker { align: center middle; }
-    PresetPicker > Vertical { width: 72; height: auto; max-height: 80%; border: round $primary; padding: 0 1;
+    PresetPicker > Vertical { width: 72; max-width: 100%; height: auto; max-height: 80%; border: round $primary; padding: 0 1;
                               background: $surface; }
     PresetPicker .heading { color: $primary; text-style: bold; }
+    PresetPicker Tabs { background: $surface; }
     PresetPicker #presets-status { color: $text-muted; }
     PresetPicker OptionList, PresetPicker OptionList:focus { height: auto; max-height: 20; border: none;
                                                             background: $surface; }
@@ -200,33 +205,58 @@ class PresetPicker(ModalScreen[Preset | None]):
     def __init__(self, store: PresetStore):
         super().__init__()
         self.store = store
+        self.is_default = False
+        self.defaults = {s.genre: s for s in default_playlist()}
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static("Saved prompts", classes="heading")
+            yield Static("Playlist · generative styles, not recordings", classes="heading")
+            yield Tabs(Tab("My playlist", id="my-playlist"),
+                       Tab("Default playlist", id="default-playlist"), active="my-playlist")
             yield Static(id="presets-status")
             yield OptionList(id="presets")
 
     def on_mount(self) -> None:
+        self._populate()
+
+    def action_switch_playlist(self, tab_id: str) -> None:
+        self.query_one(Tabs).active = tab_id
+
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        self.is_default = event.tab.id == "default-playlist"
+        self._populate()
+
+    def _populate(self) -> None:
         options = self.query_one(OptionList)
-        options.add_options([Option(Text(f"{p.name} — {p.mood or p.style.summary()}"), id=p.name)
-                             for p in self.store.list()])
+        options.clear_options()
+        if self.is_default:
+            options.add_options([Option(Text(f"{s.name} — {s.summary()}"), id=key)
+                                 for key, s in self.defaults.items()])
+        else:
+            options.add_options([Option(Text(f"{p.name} — {p.mood or p.style.summary()}"), id=p.name)
+                                 for p in self.store.list()])
         if options.option_count:
             options.highlighted = 0
-        self._show_status(self.store.error)
+        self._show_status(None if self.is_default else self.store.error)
         options.focus()
 
     def _show_status(self, error: str | None = None) -> None:
         if error:
             text = f"[$error]{escape(error)}[/]"
+        elif self.is_default:
+            text = "Click / Enter to apply · built-in styles (read-only) · Esc to close"
         elif self.query_one(OptionList).option_count:
-            text = "Enter to apply · d to delete · Esc to close"
+            text = "Click / Enter to apply · d to delete · Esc to close"
         else:
-            text = self.EMPTY
-        self.query_one("#presets-status", Static).update(text)
+            text = self.EMPTY + " · try Default playlist"
+        self.query_one("#presets-status", Static).update(text + " · Left/Right switch playlists")
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         event.stop()
+        if self.is_default:
+            style = self.defaults[event.option.id]
+            self.dismiss(Preset(style.name, style.mood, style, ""))
+            return
         preset = self.store.get(event.option.id)
         if preset is None:
             self._show_status(self.store.error or f"“{event.option.id}” is no longer saved.")
@@ -234,6 +264,8 @@ class PresetPicker(ModalScreen[Preset | None]):
         self.dismiss(preset)
 
     def action_delete(self) -> None:
+        if self.is_default:
+            return
         options = self.query_one(OptionList)
         if options.highlighted is None:
             return
@@ -258,7 +290,10 @@ class StreamApp(App):
     Screen { background: $background; }
     Header { background: #1a1218; color: $primary; }
     #panel { padding: 1 2; margin: 1 1 0 1; height: 1fr; border: round $panel; background: $surface; }
-    #title { text-style: bold; color: $primary; }
+    #title-row { height: 1; }
+    #title { text-style: bold; color: $primary; width: 1fr; }
+    #playlist { height: 1; min-height: 1; width: 12; border: none; background: $panel; color: $primary; }
+    #playlist:focus { text-style: bold reverse; }
     #details, #model { color: $text-muted; }
     #mood-line { color: $accent; text-style: italic; }
     #spectrum { height: 1fr; min-height: 5; margin: 1 0; }
@@ -273,7 +308,7 @@ class StreamApp(App):
         Binding("slash", "focus_mood", "Mood"),
         Binding("m", "pick_model", "Model"),
         Binding("s", "save_preset", "Save"),
-        Binding("p", "pick_preset", "Saved"),
+        Binding("p", "pick_preset", "Playlist"),
         Binding("plus,equals_sign", "volume(5)", "Vol +5"),
         Binding("minus", "volume(-5)", "Vol -5"),
         Binding("up", "volume(1)", "Vol +1"),
@@ -296,7 +331,9 @@ class StreamApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="panel"):
-            yield Static(id="title")
+            with Horizontal(id="title-row"):
+                yield Static(id="title")
+                yield Button("Playlist", id="playlist")
             yield Static(id="details")
             yield Static(id="mood-line")
             yield Spectrum(self.player, id="spectrum")
@@ -394,15 +431,26 @@ class StreamApp(App):
 
         self.push_screen(SaveDialog(style.name), named)
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "playlist":
+            self.action_pick_preset()
+
     def action_pick_preset(self) -> None:
+        picker = PresetPicker(self.presets)
+
         def chosen(preset: Preset | None) -> None:
             if preset is None:
                 return
             self.workers.cancel_group(self, "interpret")  # a late interpretation must not override the choice
-            self.player.set_style(preset.style)
-            self._status(f"Up next: [b]{escape(preset.name)}[/b] (saved)")
+            try:
+                self.player.set_style(preset.style)
+            except (ValueError, PlayerError) as e:
+                self._status(f"[$error]Could not apply style:[/] {escape(str(e))}")
+                return
+            source = "default" if picker.is_default else "saved"
+            self._status(f"Up next: [b]{escape(preset.name)}[/b] ({source})")
 
-        self.push_screen(PresetPicker(self.presets), chosen)
+        self.push_screen(picker, chosen)
 
     # ------------------------------------------------------------ mood interpretation
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -427,7 +475,12 @@ class StreamApp(App):
             return
         if worker.is_cancelled:
             return
-        self.player.set_style(style)
+        try:
+            self.player.set_style(style)
+        except (ValueError, PlayerError) as e:
+            if not worker.is_cancelled:
+                self.call_from_thread(self._status, f"[$error]Could not apply style:[/] {escape(str(e))}")
+            return
         self.call_from_thread(self._interpreted, style, usage)
 
     def _interpreted(self, style: Style, usage: Usage | None) -> None:

@@ -7,6 +7,7 @@ genre voices its own way, so presets and the model's answer schema stay the same
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields, replace
+import re
 
 import numpy as np
 
@@ -58,6 +59,31 @@ def _choice(value, allowed, default):
     return default
 
 
+def voice_requested(mood: str) -> bool:
+    """Only the listener's literal words opt in; never infer permission from a model answer."""
+    return isinstance(mood, str) and re.search(r"\bagrega frases\b", mood, re.IGNORECASE) is not None
+
+
+def validate_voice_lines(value) -> tuple[str, ...]:
+    """An all-or-nothing trio of bounded phrases; invalid/unrequested voice is empty."""
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return ()
+    lines = []
+    for text in value:
+        if not isinstance(text, str) or any(ord(c) < 32 or ord(c) == 127 for c in text):
+            return ()
+        text = " ".join(text.split())
+        if len(text) > 160 or not 2 <= len(text.split()) <= 12:
+            return ()
+        # A colon/semicolon can join the idea and action, but not multiple sentences.
+        if re.search(r"[.!?…]", text.rstrip(".!?…")):
+            return ()
+        if any(not any(c.isalpha() for c in word) for word in text.split()):
+            return ()
+        lines.append(text)
+    return tuple(lines)
+
+
 @dataclass(frozen=True)
 class Style:
     name: str = "Midnight Rain"
@@ -76,6 +102,11 @@ class Style:
     vinyl: float = 0.5         # crackle amount
     space: float = 0.5         # room size/wetness
     lead_density: float = 0.5  # how often the motif plays
+    voice_lines: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "voice_lines",
+                           validate_voice_lines(self.voice_lines) if voice_requested(self.mood) else ())
 
     @classmethod
     def from_dict(cls, data: dict, base: Style | None = None) -> Style:
@@ -110,11 +141,16 @@ class Style:
             vinyl=_clamp(data.get("vinyl"), 0, 1, b.vinyl),
             space=_clamp(data.get("space"), 0, 1, b.space),
             lead_density=_clamp(data.get("lead_density"), 0, 1, b.lead_density),
+            voice_lines=data.get("voice_lines", b.voice_lines),
         )
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["progression"] = list(self.progression)
+        if self.voice_lines:
+            d["voice_lines"] = list(self.voice_lines)
+        else:
+            d.pop("voice_lines")  # unchanged ordinary style/preset schema
         return d
 
     def variation(self, rng: np.random.Generator) -> Style:

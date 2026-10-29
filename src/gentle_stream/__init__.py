@@ -11,7 +11,9 @@ CONTROLS = """controls:
   /        describe a mood (feeling, concept, place...), Enter to send, Esc to leave
   m        choose the model Gentle Shell uses
   s        save what is playing under a name (prompt and style)
-  p        saved prompts: Enter applies one instantly, d deletes it
+  p        Playlist (also clickable): My playlist / Default playlist
+           Left/Right switch playlists; Up/Down highlight entries
+           click or Enter applies; d deletes only saved entries; Esc closes
   + / -    volume up / down by 5%
   ↑ / ↓    volume up / down by 1%
   b        back: leave the app, the music keeps playing
@@ -20,7 +22,14 @@ CONTROLS = """controls:
 background playback:
   the music plays in a background player; gentle-stream attaches to it when it is already playing.
   gentle-stream ctl play|pause|toggle|next|stop|status controls it from any terminal
-  (status prints one JSON line; the others exit 1 when nothing is playing).
+  (status prints one JSON line with underruns, output_underflows and buffered_seconds;
+   diagnostics are null with older players; the others exit 1 when nothing is playing).
+
+optional integrated background voice:
+  add the exact words 'agrega frases' to your mood for three short phrases in the first form
+  (beginning, middle, end), mixed into the music; later forms do not repeat them.
+  preparation uses the same mood/model call plus cached speech synthesis, never cue-time tools.
+  without 'agrega frases', voice stays off. See docs/integrated-voice.md for local setup.
 
 saved prompts live in $XDG_CONFIG_HOME/gentle-stream/presets.json (default ~/.config/gentle-stream/).
 
@@ -70,7 +79,9 @@ def ctl(action: str) -> int:
     if action == "status":
         style = player.now.style
         print(json.dumps({"running": True, "playing": player.playing, "name": style.name, "genre": style.genre,
-                          "mood": style.mood}, ensure_ascii=False))
+                          "mood": style.mood, "underruns": player.underruns,
+                          "output_underflows": player.output_underflows,
+                          "buffered_seconds": player.buffered_seconds}, ensure_ascii=False))
     elif action == "stop":
         player.close()
         return 0

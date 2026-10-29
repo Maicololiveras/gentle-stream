@@ -71,6 +71,7 @@ class Player:
         self._gain = 0.0
         self.position = 0                # samples played since start
         self.underruns = 0
+        self.output_underflows = 0
         self.level = 0.0
         self._tail = np.zeros(SPECTRUM_SIZE, dtype=np.float32)
         self._window = np.hanning(SPECTRUM_SIZE).astype(np.float32)
@@ -222,6 +223,8 @@ class Player:
         return out
 
     def _callback(self, outdata, frames, time_info, status) -> None:
+        if getattr(status, "output_underflow", False):
+            self.output_underflows += 1
         target = self.volume if self.playing else 0.0
         if self._gain == 0.0 and target == 0.0 and not self.playing:
             outdata[:] = 0
