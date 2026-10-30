@@ -25,6 +25,11 @@ background playback:
   (status prints one JSON line with underruns, output_underflows and buffered_seconds;
    diagnostics are null with older players; the others exit 1 when nothing is playing).
 
+optional native Windows audio (WSL only):
+  GENTLE_STREAM_AUDIO_OUTPUT=windows gentle-stream streams live PCM to Windows FFplay.
+  sounddevice remains the default. Stop an existing player before selecting a different output.
+  See docs/windows-wsl.md for Windows Python/FFplay paths and diagnostics.
+
 optional integrated background voice:
   add the exact words 'agrega frases' to your mood for three short phrases in the first form
   (beginning, middle, end), mixed into the music; later forms do not repeat them.
@@ -78,10 +83,12 @@ def ctl(action: str) -> int:
         return 1
     if action == "status":
         style = player.now.style
-        print(json.dumps({"running": True, "playing": player.playing, "name": style.name, "genre": style.genre,
-                          "mood": style.mood, "underruns": player.underruns,
-                          "output_underflows": player.output_underflows,
-                          "buffered_seconds": player.buffered_seconds}, ensure_ascii=False))
+        status = {"running": True, "playing": player.playing, "name": style.name, "genre": style.genre,
+                  "mood": style.mood, "underruns": player.underruns,
+                  "output_underflows": player.output_underflows, "buffered_seconds": player.buffered_seconds}
+        if getattr(player, 'audio_output', None) == 'windows':
+            status.update(audio_output='windows', audio_output_error=player.audio_output_error)
+        print(json.dumps(status, ensure_ascii=False))
     elif action == "stop":
         player.close()
         return 0

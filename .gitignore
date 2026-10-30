@@ -2,6 +2,10 @@
 .voice-venv/
 .audio-differential.*/
 .audio-pause-probe.*/
+.audio-windows-trial.*/
+.audio-windows-checks.*/
+.audio-windows-lifecycle.*/
+.audio-windows-independent.*/
 .delivery-pr/
 __pycache__/
 *.pyc

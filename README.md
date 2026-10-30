@@ -125,6 +125,12 @@ uv run gentle-stream
 
 It starts playing right away. Press `/`, describe a mood, press `Enter`.
 
+**WSL optional Windows output:** select `GENTLE_STREAM_AUDIO_OUTPUT=windows` when
+starting a new player to stream live mixed PCM to native Windows FFplay instead
+of WSLg/PulseAudio. The current sounddevice output remains the default. See
+[Windows/WSL setup](docs/windows-wsl.md#optional-native-windows-audio) for required
+Windows Python/FFplay paths, unchanged controls, and unavailable device metrics.
+
 ```bash
 gentle-stream --mood "rainy night in a small café"        # interpret a mood on start
 gentle-stream --model claude-bridge/claude-haiku-5-5      # choose the model up front
