@@ -19,9 +19,9 @@ from pathlib import Path
 
 import numpy as np
 
-from . import genres
+from . import genres, voice
 from . import samples as _samples
-from .composer import Composer
+from .composer import Composer, FIRST_FORM
 from .genres.base import Piece
 from .genres.lofi import Instruments  # noqa: F401  (re-exported: the procedural lo-fi voices)
 from .mastering import Compressor, ConvolutionReverb, procedural_ir, soft_clip
@@ -30,6 +30,9 @@ from .synth import SR, StatefulFilter, _sos, bp, hp, lp, mtof  # noqa: F401  (re
 
 IR_SEED = 1
 RAMP = 0.05   # seconds over which a changed master gain glides to its new value
+VOICE_GAIN = .80
+VOICE_MUSIC_BED = .12
+VOICE_FADE = .05  # seconds at each end of a clip, continuous across bars
 
 
 @lru_cache(maxsize=16)
@@ -50,7 +53,7 @@ class Engine:
         renderer = _samples.load_renderer(sf2, sr) if sf2 is not None else None
         self._sampled = _samples.SampleInstruments(renderer, np.random.default_rng(0), sr) if renderer else None
         self._lock = threading.Lock()
-        self._pending_style: Style | None = None
+        self._pending_style: tuple[Style, tuple[np.ndarray, ...]] | None = None
         self._pending_next = False
         self._root_rng = np.random.default_rng(seed)
         self._acc = np.zeros((int(self.HEADROOM * sr), 2))
@@ -70,13 +73,24 @@ class Engine:
         self._reverb: ConvolutionReverb | None = None
         self._comp = Compressor(sr)
         self._last: dict[str, float] = {}   # master gains of the previous bar (see `_glide`)
-        self._start_piece(style)
+        self._start_piece(style, self._load_voice(style))
+
+    def _load_voice(self, style: Style) -> tuple[np.ndarray, ...]:
+        if not style.voice_lines:
+            return ()
+        try:
+            return voice.load(style.voice_lines, sr=self.sr)
+        except voice.VoiceError as e:
+            # ValueError is already transported as a visible rejection by the daemon.
+            raise ValueError("Cannot apply voice: prepared cache missing or corrupt; submit the mood "
+                             "with 'agrega frases' again to prepare it.") from e
 
     # ------------------------------------------------------------ control (any thread)
     def queue_style(self, style: Style) -> None:
-        """Play `style` from the next bar on (a new piece)."""
+        """Validate/load voice on the caller before queuing; failure leaves playback untouched."""
+        clips = self._load_voice(style)
         with self._lock:
-            self._pending_style, self._pending_next = style, False
+            self._pending_style, self._pending_next = (style, clips), False
 
     def queue_next(self) -> None:
         """Start a new piece with the same mood from the next bar on."""
@@ -93,7 +107,12 @@ class Engine:
         return 240.0 / self.style.bpm
 
     # ------------------------------------------------------------ piece setup
-    def _start_piece(self, style: Style) -> None:
+    def _start_piece(self, style: Style, clips: tuple[np.ndarray, ...]) -> None:
+        self._voice_clips = clips
+        n = int(round(240.0 / style.bpm * self.sr))
+        end = sum(bars for _, bars in FIRST_FORM) * n
+        self._voice_cues = tuple((int(end * position) - (len(clip) if position == 1 else 0), clip)
+                                 for position, clip in zip(voice.CUE_POSITIONS, clips))
         self.style = style
         self.genre = genres.get(style.genre)
         self.seed = int(self._root_rng.integers(2 ** 31))
@@ -115,15 +134,28 @@ class Engine:
             style, nxt = self._pending_style, self._pending_next
             self._pending_style, self._pending_next = None, False
         if style is not None:
-            self._start_piece(style)
+            self._start_piece(*style)
         elif nxt:
-            self._start_piece(self.style.variation(self._root_rng))
+            # Same phrases, already validated and resident: no disk I/O on next/render.
+            self._start_piece(self.style.variation(self._root_rng), self._voice_clips)
         self._schedule_bar()
         n = int(round(self.bar_seconds * self.sr))
         out = self._acc[:n].copy()
         self._acc[:-n] = self._acc[n:]
         self._acc[-n:] = 0
         out = self._master(out)
+        # Voice bypasses music distortion/reverb. Gains sum to at most one;
+        # absolute clip offsets keep the entry/exit ramps continuous across bars.
+        start = self.bar * n
+        fade = max(1, int(VOICE_FADE * self.sr))
+        for cue, clip in self._voice_cues:
+            lo, hi = max(start, cue), min(start + n, cue + len(clip))
+            if lo < hi:
+                span = slice(lo - start, hi - start)
+                indices = np.arange(lo - cue, hi - cue)
+                weight = np.clip(np.minimum(indices, len(clip) - 1 - indices) / fade, 0, 1)[:, None]
+                out[span] = (out[span] * (1 - (1 - VOICE_MUSIC_BED) * weight)
+                             + clip[lo - cue:hi - cue] * VOICE_GAIN * weight)
         self.bar += 1
         self.samples_out += n
         return out.astype(np.float32)

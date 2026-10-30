@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""WSL -> installed Windows Edge TTS -> FFmpeg pipes; synthesis only, no player.
+
+Usage: python3 scripts/forge-voice-windows 'Sigue tu camino' 44100
+stdout is raw little-endian float32 stereo PCM; diagnostics go to stderr.
+"""
+import argparse
+from pathlib import Path
+import subprocess
+import sys
+
+# Project-isolated Edge TTS 7.3.1; never use or upgrade Forge's shared Python.
+PYTHON = str(Path(__file__).resolve().parents[1] / ".voice-venv" / "Scripts" / "python.exe")
+FFMPEG = ("/mnt/c/Users/maicolj/AppData/Local/Microsoft/WinGet/Packages/"
+          "Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1-full_build/bin/ffmpeg.exe")
+VOICE = "es-CO-GonzaloNeural"
+RATE = "-10%"
+# Constant program; all listener content is passed as argv, never interpolated code.
+TTS = '''import asyncio, sys
+import edge_tts
+async def main():
+    audio = bytearray()
+    async for part in edge_tts.Communicate(sys.argv[1], sys.argv[2], rate=sys.argv[3]).stream():
+        if part["type"] == "audio":
+            audio.extend(part["data"])
+            if len(audio) > 2000000:
+                raise RuntimeError("voice audio too large")
+    sys.stdout.buffer.write(audio)
+asyncio.run(main())
+'''
+
+
+def render(text, sr):
+    if (type(sr) is not int or not 8000 <= sr <= 96000 or not isinstance(text, str)
+            or len(text) > 160 or not 2 <= len(text.split()) <= 12
+            or any(ord(c) < 32 or ord(c) == 127 for c in text)):
+        raise RuntimeError("invalid voice phrase or sample rate")
+    try:
+        mp3 = subprocess.run([PYTHON, "-B", "-c", TTS, text, VOICE, RATE],
+                             stdin=subprocess.DEVNULL, capture_output=True, timeout=25, check=True).stdout
+        if not mp3 or len(mp3) > 2000000:
+            raise RuntimeError("invalid voice audio")
+        # Decode slightly past the bound so the caller rejects >8s, not silently truncates.
+        pcm = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
+                              "-i", "pipe:0", "-t", "8.001", "-f", "f32le", "-acodec", "pcm_f32le",
+                              "-ac", "2", "-ar", str(sr), "pipe:1"],
+                             input=mp3, capture_output=True, timeout=25, check=True).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError("Windows voice synthesis/decode failed") from e
+    if not pcm or len(pcm) % 8 or len(pcm) > sr * 8 * 8:
+        raise RuntimeError("voice PCM exceeds 8 seconds or is invalid")
+    return pcm
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("text", help="one concise Spanish sentence (2-12 words, max 160 characters)")
+    parser.add_argument("sr", nargs="?", type=int, default=44100, help="PCM sample rate (default 44100)")
+    args = parser.parse_args(argv)
+    try:
+        pcm = render(args.text, args.sr)
+    except RuntimeError as e:
+        print(f"forge-voice-windows: {e}", file=sys.stderr)
+        return 1
+    sys.stdout.buffer.write(pcm)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

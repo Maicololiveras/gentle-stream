@@ -69,15 +69,25 @@ def connect() -> PlayerClient:
 
 def ensure(timeout: float = STARTUP_TIMEOUT) -> PlayerClient:
     """Attach to the running player, or start one and attach to it."""
+    requested = os.environ.get(daemon.AUDIO_OUTPUT_ENV)
+    if requested and requested not in ('sounddevice', 'windows'):
+        raise PlayerError(f'{daemon.AUDIO_OUTPUT_ENV} must be sounddevice or windows')
+
+    def selected(player):
+        if requested and getattr(player, 'audio_output', None) != requested:
+            player.detach()
+            raise PlayerError('a player with a different audio output is running; use gentle-stream ctl stop first')
+        return player
+
     try:
-        return connect()
+        return selected(connect())
     except NoPlayer:
         pass
     deadline = time.monotonic() + timeout
     _spawn(deadline)
     while True:   # ready, or another player is starting: it listens once its audio is open
         try:
-            return connect()
+            return selected(connect())
         except NoPlayer:
             if time.monotonic() > deadline:
                 raise PlayerError("the player did not start in time") from None
@@ -146,6 +156,12 @@ class PlayerClient:
         self.pid = state["pid"]
         self.playing, self.volume, self.level = state["playing"], state["volume"], state["level"]
         self.backend = state["backend"]
+        self.audio_output = state.get('audio_output')
+        self.audio_output_error = state.get('audio_output_error')
+        # Older daemons do not report diagnostics: unknown is not a zero count.
+        self.underruns = state.get("underruns")
+        self.output_underflows = state.get("output_underflows")
+        self.buffered_seconds = state.get("buffered_seconds")
         self.now = NowPlaying(Style.from_dict(now["style"]), now["piece"], now["bar"])
         self.style = Style.from_dict(state["style"])   # rendered, maybe not audible yet: the base for a mood
 

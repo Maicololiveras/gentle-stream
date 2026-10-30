@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Local WSL launcher for maicolj's existing Windows Gentle Shell bundle."""
+import os
+from pathlib import Path, PureWindowsPath
+import re
+import sys
+
+
+BUNDLE = Path("/mnt/c/Users/maicolj/.gentle-shell-bundle")
+WINDOWS_BUNDLE = PureWindowsPath("C:/Users/maicolj/.gentle-shell-bundle")
+
+
+def main(args):
+    try:
+        version = (BUNDLE / "current").read_text(encoding="utf-8").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
+            raise ValueError("invalid bundle version in current")
+        relative = Path("versions") / version / "node_modules/gentle-pi/bin/gentle-shell.mjs"
+        node = BUNDLE / "runtime/node-24.21.0/node.exe"
+        if not node.is_file():
+            raise ValueError(f"Windows Node not found: {node}")
+        if not (BUNDLE / relative).is_file():
+            raise ValueError(f"Gentle Shell entrypoint not found: {BUNDLE / relative}")
+        # Windows Node needs a Windows script path; every incoming argument,
+        # including the caller's '--', passes through without a shell parser.
+        script = str(WINDOWS_BUNDLE.joinpath(*relative.parts))
+        os.execv(str(node), [str(node), script, *args])
+    except (OSError, ValueError) as error:
+        print(f"gentle-shell-windows: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -45,6 +45,20 @@ Describe a feeling, a concept, a place or a scene, in any language. Gentle Shell
 
 ---
 
+### Optional background voice — Only when requested
+
+Add the exact words **agrega frases** to your mood, for example `"rock para avanzar, agrega frases"`.
+Three short reflective, actionable phrases are mixed directly into the music at the beginning, middle and end
+of the first 44-bar form, once per piece (not repeated in later endless forms). Voice is off otherwise.
+During phrases, voice gain is 80% and the music bed drops to 12%, with 50 ms entry/exit ramps;
+audio outside the phrases is unchanged. Prepared speech is reused without another synthesis call.
+The same mood/model call supplies the phrases; speech is prepared and cached before the style is queued,
+never played through an external tool at cue time. This local integration needs the Windows synthesis setup
+in [Integrated voice](docs/integrated-voice.md). A missing/corrupt preset voice cache rejects the style visibly;
+submit its mood again to prepare it. The current music keeps playing.
+
+---
+
 ### Real composition — Not a loop
 
 A composer plans every piece with a **song form** (intro → A → B → A' → breakdown → B' → release, then the form loops with fresh variation), cadences that resolve, passing chords, an occasional key lift, a **motif** developed by repetition, sequence, inversion and augmentation, a counter-melody in contrary motion and a bass line that walks into the next chord. Press `n` and you get a new piece with the same mood: new key, progression, melody and groove.
@@ -71,7 +85,7 @@ The engine renders one bar at a time, with note tails ringing into the next bar,
 
 ### Saved prompts — Keep what you love
 
-Press `s` to save what is playing under a name. gentle-stream stores the prompt **and the musical parameters it produced**, so pressing `p` later brings that sound back instantly, with no model call. Every piece is still newly generated.
+Press `s` to save what is playing under a name. gentle-stream stores the prompt **and the musical parameters it produced**, so clicking **Playlist** (or pressing `p`) later brings that sound back instantly, with no model call. **My playlist** contains your saved styles; **Default playlist** contains built-in styles for all ten genres, including the starting **Midnight Rain** lo-fi style. These are generative styles, not prerecorded songs: every piece is still newly generated.
 
 ---
 
@@ -110,6 +124,12 @@ uv run gentle-stream
 ```
 
 It starts playing right away. Press `/`, describe a mood, press `Enter`.
+
+**WSL optional Windows output:** select `GENTLE_STREAM_AUDIO_OUTPUT=windows` when
+starting a new player to stream live mixed PCM to native Windows FFplay instead
+of WSLg/PulseAudio. The current sounddevice output remains the default. See
+[Windows/WSL setup](docs/windows-wsl.md#optional-native-windows-audio) for required
+Windows Python/FFplay paths, unchanged controls, and unavailable device metrics.
 
 ```bash
 gentle-stream --mood "rainy night in a small café"        # interpret a mood on start
@@ -161,7 +181,7 @@ Model extensions stay enabled on purpose: some providers (such as `claude-bridge
 | `/` | Describe a mood; `Enter` sends it, `Esc` leaves the input |
 | `m` | Choose the model Gentle Shell uses (listed from `gentle-shell -- --list-models`); `Enter` picks, `Esc` keeps the current one |
 | `s` | Save what is playing under a name; `Enter` saves (an existing name is replaced), `Esc` cancels |
-| `p` | Saved prompts: `Enter` applies one instantly, `d` or `Delete` removes it, `Esc` closes |
+| `p` / click **Playlist** | Open **My playlist** / **Default playlist**; Left/Right switch playlists (or click a section), then click an entry or press `Enter` to apply; `d` / `Delete` removes only saved entries; `Esc` closes |
 | `+` / `-` | Volume up / down by 5% |
 | `↑` / `↓` | Volume up / down by 1% |
 | `b` | Back: leave the app and keep the music playing in the background |
@@ -186,7 +206,7 @@ Model extensions stay enabled on purpose: some providers (such as `claude-bridge
 The music plays in a background player, one per user, that `gentle-stream` starts on its own. Press `b` to leave the app with the music still playing; run `gentle-stream` again and it attaches to the same music (with `--mood`, the new mood is sent to it). `q` stops the music and the player.
 
 ```bash
-gentle-stream ctl status   # {"running": true, "playing": true, "name": "Midnight Rain", "genre": "lofi", "mood": ""}
+gentle-stream ctl status   # playback details and audio diagnostics as one JSON line
 gentle-stream ctl pause    # also: play, toggle, next
 gentle-stream ctl stop     # ends the background player
 ```
@@ -195,6 +215,24 @@ gentle-stream ctl stop     # ends the background player
 | :--- | :--- | :--- |
 | `ctl status` | One JSON line; just `{"running": false}` when nothing plays | `0` |
 | `ctl play`, `pause`, `toggle`, `next`, `stop` | Nothing, or `gentle-stream: nothing is playing` on stderr | `0`, or `1` when nothing plays |
+
+### Audio diagnostics
+
+If audio cuts out, run `gentle-stream ctl status` again and compare the readings:
+
+```json
+{"running": true, "playing": true, "name": "Midnight Rain", "genre": "lofi", "mood": "", "underruns": 0, "output_underflows": 0, "buffered_seconds": 1.2}
+```
+
+| Field | Interpretation |
+| :--- | :--- |
+| `underruns` | Callbacks that could not obtain enough samples from the application's rendered-audio queue |
+| `output_underflows` | Callbacks reporting a host/PortAudio output underflow, even if the application queue was full or playback was paused |
+| `buffered_seconds` | Audio currently queued in the application, in seconds (not the device buffer or total output latency) |
+
+Both counters are cumulative since the current background player (daemon) started; pause, next and reconnect do not reset them. The queue reading is a changing snapshot, not necessarily the queue depth when a glitch occurred. These metrics help distinguish application starvation from host output trouble, but do **not** prove a root cause or detect every audible artifact. They do not change the sound or buffer settings.
+
+An older running daemon cannot supply these fields: the updated client reports them as JSON `null` (unknown, not zero). They become available after that daemon is stopped and a new one starts. When no player is running, status remains just `{"running": false}`.
 
 The player listens on a Unix socket in a private directory (`$XDG_RUNTIME_DIR/gentle-stream`, default `~/.cache/gentle-stream/run`, mode `0700`), authenticated with a random key in a `0600` file. A player that crashed is detected and replaced on the next start. If the audio output cannot be opened, `gentle-stream` prints the error and exits with `1`.
 
@@ -229,8 +267,10 @@ The cost is the one Gentle Shell reports, in US dollars. Providers used through 
 | | |
 | :--- | :--- |
 | **Save** | `s`, type a name (up to 40 characters), `Enter` |
-| **Apply** | `p`, pick one, `Enter` — starts at the next bar and sounds like it did when you saved it |
-| **Delete** | `p`, highlight one, `d` or `Delete` |
+| **Apply** | Click **Playlist** or press `p`, choose **My playlist**, click an entry or press `Enter` — starts at the next bar |
+| **Built-ins** | Choose **Default playlist** for genre styles without a model call; entries cannot be deleted and browsing/applying them never changes your saved file |
+| **Keyboard** | Left/Right switch playlists even while the entry list is focused or empty; Up/Down highlight entries; `Enter` applies, `Esc` closes |
+| **Delete** | In **My playlist**, highlight one, `d` or `Delete` |
 | **File** | `~/.config/gentle-stream/presets.json` (or `$XDG_CONFIG_HOME/gentle-stream/presets.json`) |
 | **Format** | Plain JSON with the prompt and its musical parameters, rewritten atomically |
 | **Safety** | An unreadable file is reported and never overwritten; invalid entries are skipped; every value is validated like a model answer, so a hand-edited file still plays |

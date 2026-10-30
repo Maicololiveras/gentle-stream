@@ -71,6 +71,7 @@ class Player:
         self._gain = 0.0
         self.position = 0                # samples played since start
         self.underruns = 0
+        self.output_underflows = 0
         self.level = 0.0
         self._tail = np.zeros(SPECTRUM_SIZE, dtype=np.float32)
         self._window = np.hanning(SPECTRUM_SIZE).astype(np.float32)
@@ -84,6 +85,8 @@ class Player:
             return
         self._stream = self._factory(samplerate=self.engine.sr, channels=2, dtype="float32",
                                      blocksize=self._blocksize, latency="high", callback=self._callback)
+        if not getattr(self._stream, 'reports_output_underflows', True):
+            self.output_underflows = None
         self._producer.start()
         deadline = time.monotonic() + 5
         while self._buffered == 0 and self._producer.is_alive() and time.monotonic() < deadline:
@@ -146,6 +149,14 @@ class Player:
             if need <= 0:
                 break
         return np.concatenate(parts) if parts else np.zeros((0, 2), dtype=np.float32)
+
+    @property
+    def audio_output(self) -> str:
+        return getattr(self._stream, 'audio_output', 'sounddevice')
+
+    @property
+    def audio_output_error(self):
+        return getattr(self._stream, 'error', None)
 
     @property
     def buffered_seconds(self) -> float:
@@ -222,6 +233,8 @@ class Player:
         return out
 
     def _callback(self, outdata, frames, time_info, status) -> None:
+        if self.output_underflows is not None and getattr(status, "output_underflow", False):
+            self.output_underflows += 1
         target = self.volume if self.playing else 0.0
         if self._gain == 0.0 and target == 0.0 and not self.playing:
             outdata[:] = 0
