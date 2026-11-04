@@ -48,6 +48,7 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
     async def test_main_click_opener_empty_saved_switch_and_click_default(self):
         async with self.app.run_test(size=(80, 24)) as pilot:
             self.assertTrue(await pilot.click("#playlist"))
+            await pilot.pause()  # drain the newly pushed screen's mount/populate messages
             self.assertIsInstance(self.app.screen, PresetPicker)
             self.assertIn("No saved prompts yet", str(self.app.screen.query_one("#presets-status").render()))
             self.assertTrue(await pilot.click("#default-playlist"))
@@ -128,9 +129,17 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
     async def test_keyboard_saved_apply_delete_and_escape_are_preserved(self):
         saved, _ = self.store.save("My rain", Style(mood="quiet rain"))
         async with self.app.run_test() as pilot:
-            await pilot.press("p", "enter")
+            await pilot.press("p")
+            await pilot.pause()  # the picker must mount and highlight before Enter
+            self.assertIsInstance(self.app.screen, PresetPicker)
+            options = self.app.screen.query_one("OptionList")
+            self.assertEqual(options.option_count, 1)
+            self.assertEqual(options.highlighted, 0)
+            await pilot.press("enter")
             self.player.set_style.assert_called_once_with(saved.style)
-            await pilot.press("p", "d")
+            await pilot.press("p")
+            await pilot.pause()
+            await pilot.press("d")
             self.assertEqual(self.store.list(), [])
             await pilot.press("escape")
             self.assertNotIsInstance(self.app.screen, PresetPicker)

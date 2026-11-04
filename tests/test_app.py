@@ -99,8 +99,12 @@ async def test_a_mood_is_interpreted_and_queued():
         await pilot.pause(0.1)
         assert shell.calls[0][0] == "summer storm"
         assert "Summer Storm" in text(app, "#status")
-        queued = player.engine._pending_style or player.engine.style
-        assert (queued.name, queued.mode, queued.mood) == ("Summer Storm", "mixolydian", "summer storm")
+        # Render the queued style through the public control, not the private voice/clip queue.
+        await pilot.press("n")
+        rendered = player.style
+        assert (rendered.name, rendered.mode, rendered.mood, rendered.bpm) == (
+            "Summer Storm", "mixolydian", "summer storm", 78)
+        assert rendered.voice_lines == ()
         assert app.query_one("#mood").value == ""
 
 
@@ -385,10 +389,12 @@ async def test_p_applies_a_saved_prompt_instantly_without_gentle_shell(store):
         await pilot.pause(0.1)
         assert not isinstance(app.screen, PresetPicker)
         assert shell.calls == []
-        queued = player.engine._pending_style or player.engine.style
-        assert queued == saved.style
-        assert (queued.name, queued.mood) == ("Rainy Café", "rainy night in a small café")
         assert "Up next: Rainy Café (saved)" in text(app, "#status")
+        await pilot.press("n")  # render the saved choice, including its voice settings
+        rendered = player.style
+        assert rendered == saved.style
+        assert (rendered.name, rendered.mood) == ("Rainy Café", "rainy night in a small café")
+        assert shell.calls == []
 
 
 @pytest.mark.asyncio
