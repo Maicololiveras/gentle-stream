@@ -1,0 +1,317 @@
+"""Public Textual flows; no audio devices, generators, or live player."""
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import numpy as np
+import pytest
+from textual.widgets import Button, Input, OptionList, Select
+
+from gentle_stream.app import ModelPicker, PresetPicker, SaveDialog, StreamApp
+from gentle_stream.client import PlayerError
+from gentle_stream.playlist_library import PlaylistLibrary
+from gentle_stream.presets import PresetStore
+from gentle_stream.style import DEFAULT, Style
+
+
+@pytest.fixture
+def ui(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    store = PresetStore(tmp_path / "presets.json")
+    library = PlaylistLibrary(tmp_path / "playlist-library.json")
+    player = Mock(now=SimpleNamespace(style=DEFAULT, piece=1, bar=0,
+                                     playlist_name="Audible", playlist_index=1),
+                  playing=True, volume=.8, continuous=False,
+                  playlist_name="Future", playlist_index=9)
+    player.spectrum.side_effect = lambda width: np.zeros(width)
+    player.set_volume.side_effect = lambda value: setattr(player, "volume", value)
+    player.toggle.side_effect = lambda: setattr(player, "playing", not player.playing)
+    player.set_continuous.side_effect = lambda value: setattr(player, "continuous", value)
+    shell = Mock(model=None)
+    shell.list_models.return_value = ["provider/chosen-model"]
+    app = StreamApp(player, shell, presets=store)
+    app.library = library
+    return app, player, shell, store, library
+
+
+def shown(app, selector):
+    return str(app.screen.query_one(selector).render())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(60, 20), (80, 24)])
+async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
+    app, p, shell, store, _ = ui
+    async with app.run_test(size=size) as pilot:
+        panel, strip, mood = [app.query_one(s) for s in ("#panel", "#commands", "#mood")]
+        assert panel.region.bottom <= strip.region.y < strip.region.bottom <= mood.region.y
+        assert app.query_one("#spectrum").region.height >= 5
+        for selector in ("#state", "#model", "#status"):
+            assert app.query_one(selector).region.bottom <= panel.content_region.bottom
+        for id, icon in {"play": "⏸", "next": "⏭", "mood-command": "✎",
+                         "save-command": "💾", "playlist-command": "☷", "continuous": "↻ off"}.items():
+            assert str(app.query_one(f"#{id}", Button).label) == icon
+        for id in ("play", "next", "mood-command", "model-command", "save-command", "playlist-command",
+                   "continuous", "quieter", "louder"):
+            button = app.query_one(f"#{id}", Button)
+            assert button.can_focus and button.tooltip
+            await pilot.wait_for_scheduled_animations()  # finish focus scrolling from the previous click
+            button.scroll_visible(animate=False, immediate=True)
+            await pilot.pause()
+            assert await pilot.click(f"#{id}", offset=(button.size.width // 2, 0)), id
+            await pilot.pause()
+            if id == "model-command":
+                assert isinstance(app.screen, ModelPicker)
+                await pilot.press("down", "enter")
+                await pilot.pause()
+                assert "chosen-model" in str(app.query_one("#model-command", Button).label)
+                model_button = app.query_one("#model-command", Button)
+                assert model_button.content_region.width >= len(str(model_button.label))
+                assert "provider/chosen-model" in str(app.query_one("#model-command").tooltip)
+            elif id == "save-command":
+                assert isinstance(app.screen, SaveDialog)
+                await pilot.press("escape")
+            elif id == "playlist-command":
+                assert isinstance(app.screen, PresetPicker)
+                await pilot.press("escape")
+        p.toggle.assert_called_once()
+        p.next.assert_called_once()
+        assert p.set_volume.call_count == 2 and p.volume == .8
+        p.set_playlist.assert_not_called()
+        assert "Select a song" in shown(app, "#status")
+        await pilot.press("escape", "space", "n", "minus", "plus")
+        assert p.toggle.call_count == 2 and p.next.call_count == 2
+        await pilot.press("escape", "tab")
+        assert isinstance(app.focused, Button)
+        (store.path.parent / f"toolbar-{size[0]}x{size[1]}.svg").write_text(app.export_screenshot())
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_save_new_existing_and_legacy_snapshot_replacement(ui):
+    app, p, shell, store, library = ui
+    async with app.run_test() as pilot:
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#save-name", Input).value = "Same"
+        await pilot.press("enter")
+        legacy = store.path.read_bytes()
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#save-destination", Select).value = "new"
+        await pilot.pause()
+        app.screen.query_one("#save-playlist", Input).value = "[rose] Night"
+        app.screen.query_one("#save-name", Input).value = "Same"
+        p.now.style = Style(name="Future")  # save uses snapshot from opening dialog
+        await pilot.click("#save-submit")
+        await pilot.pause()
+        assert library.get("[rose] Night", "Same").style == store.get("Same").style
+        assert store.path.read_bytes() == legacy
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.click("#save-destination")  # SelectCurrent is the actual mouse target
+        await pilot.press("end", "enter")
+        await pilot.pause()
+        assert not app.screen.query_one("#save-playlist").display
+        app.screen.query_one("#save-name", Input).value = "same"
+        await pilot.click("#save-submit")
+        await pilot.pause()
+        assert len(library.list()) == 1
+        assert library.get("[rose] Night", "same").style.name == "same"
+        assert library.get("[rose] Night", "same").style.bpm == p.now.style.bpm
+        assert "Replaced" in shown(app, "#status")
+        assert store.path.read_bytes() == legacy
+        shell.interpret_with_usage.assert_not_called()
+        shell.list_models.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_save_corrupt_and_validation_errors_keep_fields(ui):
+    app, p, shell, store, library = ui
+    library.path.write_text("{oops")
+    async with app.run_test() as pilot:
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#save-destination", Select).value = "new"
+        await pilot.pause()
+        app.screen.query_one("#save-name", Input).value = "Keep me"
+        app.screen.query_one("#save-playlist", Input).value = "   "
+        await pilot.click("#save-submit")
+        assert "empty" in shown(app, "#save-status").lower()
+        app.screen.query_one("#save-playlist", Input).value = "Night"
+        app.screen.query_one("#save-playlist", Input).focus()
+        await pilot.press("enter")
+        assert "playlist-library.json" in shown(app, "#save-status")
+        assert app.screen.query_one("#save-name", Input).value == "Keep me"
+        assert app.screen.query_one("#save-playlist", Input).value == "Night"
+        assert library.path.read_text() == "{oops" and not store.path.exists()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_groups_back_delete_scope_and_continuous_selected(ui):
+    app, p, shell, store, library = ui
+    store.save("Shared", DEFAULT)
+    library.save("Night", "Zulu", Style(bpm=80))
+    library.save("Night", "Alpha", Style(bpm=70))
+    library.save("Other", "Zulu", Style(bpm=90))
+    before = store.path.read_bytes()
+    async with app.run_test() as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        options = app.screen.query_one("#presets", OptionList)
+        assert options.option_count == 3
+        assert "Saved prompts" in str(options.get_option_at_index(0).prompt)
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert "Night" in shown(app, "#presets-breadcrumb")
+        assert "Alpha" in str(options.get_option_at_index(0).prompt)
+        await pilot.press("down")
+        assert await pilot.click("#playlist-loop")
+        await pilot.pause()
+        songs = library.list_songs("Night")
+        p.set_playlist.assert_called_once_with([s.style for s in songs], start_index=1,
+                                              name="Night", continuous=True)
+        p.play.assert_called_once()
+        p.set_style.assert_not_called()
+        p.continuous = True
+        await pilot.click("#continuous")
+        p.set_continuous.assert_called_once_with(False)
+        assert p.play.call_count == 1
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        await pilot.press("down", "d")
+        assert library.get("Night", "Zulu") is None
+        assert library.get("Other", "Zulu") is not None
+        assert store.path.read_bytes() == before
+        assert await pilot.click("#playlist-back")
+        await pilot.pause()
+        assert options is not None
+        assert app.screen.query_one("#presets", OptionList).option_count == 3
+        shell.interpret_with_usage.assert_not_called()
+        shell.list_models.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_normal_selection_remembers_full_list_for_toolbar_and_errors(ui):
+    app, p, shell, store, library = ui
+    library.save("[bold]", "[x]", DEFAULT)
+    library.save("[bold]", "Z", Style(bpm=90))
+    async with app.run_test() as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        p.set_style.assert_called_once_with(library.get("[bold]", "Z").style)
+        p.set_playlist.side_effect = PlayerError("old daemon: unknown command")
+        await pilot.click("#continuous")
+        await pilot.pause()
+        assert "old daemon: unknown command" in shown(app, "#status")
+        p.play.assert_not_called()
+        assert "off" in str(app.query_one("#continuous", Button).label)
+        assert "Future" not in shown(app, "#state")
+        assert "Audible" in shown(app, "#state")
+        p.set_playlist.side_effect = None
+        await pilot.press("c")
+        p.set_playlist.assert_called_with([s.style for s in library.list_songs("[bold]")],
+                                        start_index=1, name="[bold]", continuous=True)
+        p.play.assert_called_once()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_default_continuous_starts_highlighted_and_is_read_only(ui):
+    app, p, shell, store, library = ui
+    async with app.run_test(size=(60, 20)) as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("right", "down", "d")
+        assert await pilot.click("#playlist-loop")
+        await pilot.pause()
+        from gentle_stream.playlists import default_playlist
+        styles = sorted(default_playlist(), key=lambda s: s.name.casefold())
+        p.set_playlist.assert_called_once_with(styles, start_index=1, name="Default playlist", continuous=True)
+        p.play.assert_called_once()
+        assert not store.path.exists() and not library.path.exists()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,key,button", [("toggle", "space", "play"), ("next", "n", "next"),
+                                             ("set_volume", "minus", "quieter")])
+@pytest.mark.parametrize("via", ["keyboard", "click"])
+async def test_transport_rejections_stay_actionable_without_crashing(ui, method, key, button, via):
+    app, p, shell, store, library = ui
+    getattr(p, method).side_effect = PlayerError("transport cut unavailable")
+    async with app.run_test() as pilot:
+        if via == "click":
+            app.query_one(f"#{button}").scroll_visible(immediate=True)
+            await pilot.pause()
+            assert await pilot.click(f"#{button}")
+        else:
+            await pilot.press(key)
+        await pilot.pause()
+        assert "transport cut unavailable" in shown(app, "#status")
+        assert app.is_running and p.playing and p.volume == .8
+        p.close.assert_not_called()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_empty_group_hint_and_mood_markup_are_literal(ui):
+    app, p, shell, store, library = ui
+    library.save("Empty", "Gone", DEFAULT)
+    library.delete("Empty", "Gone")
+    async with app.run_test(size=(60, 20)) as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert app.screen.query_one("#playlist-loop", Button).disabled
+        await pilot.press("c")
+        assert "Select a song" in shown(app, "#presets-status")
+        p.set_playlist.assert_not_called()
+        assert library.list_songs("Empty") == [] and len(library.list()) == 1
+        await pilot.press("escape")
+        # Keep interpretation pending so the status is observable before any result.
+        import threading
+        release = threading.Event()
+        def interpret(*args):
+            release.wait(5)
+            return DEFAULT, None
+        shell.interpret_with_usage.side_effect = interpret
+        await pilot.press("slash")
+        app.query_one("#mood", Input).value = "[bold]fog[/bold]"
+        await pilot.press("enter")
+        try:
+            assert "[bold]fog[/bold]" in shown(app, "#status")
+        finally:
+            release.set()
+            await app.workers.wait_for_complete()
+
+
+@pytest.mark.asyncio
+async def test_unwritable_library_keeps_save_and_long_model_is_elided(ui):
+    app, p, shell, store, library = ui
+    shell.model = "provider/" + "model-" * 20
+    library.path.mkdir()
+    async with app.run_test(size=(60, 20)) as pilot:
+        label = str(app.query_one("#model-command", Button).label)
+        assert len(label) <= 25 and "…" in label
+        assert shell.model in str(app.query_one("#model-command").tooltip)
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.click("#save-destination")
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        app.screen.query_one("#save-playlist", Input).value = "Night"
+        app.screen.query_one("#save-playlist", Input).focus()
+        await pilot.press("enter")
+        assert isinstance(app.screen, SaveDialog)
+        assert "Could not save" in shown(app, "#save-status")
+        assert app.screen.query_one("#save-playlist", Input).value == "Night"
+        assert library.path.is_dir() and not store.path.exists()
+        shell.interpret_with_usage.assert_not_called()

@@ -9,21 +9,24 @@ be saved under a name and applied later, instantly, without asking Gentle Shell 
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.markup import escape
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, HorizontalScroll, Vertical
 from textual.screen import ModalScreen
 from textual.theme import Theme
-from textual.widgets import Button, Footer, Header, Input, OptionList, Static, Tab, Tabs
+from textual.widgets import Button, Footer, Header, Input, OptionList, Select, Static, Tab, Tabs
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
 from .bridge import GentleShell, InterpretError, Usage
 from .client import PlayerError
 from .player import Player
+from .playlist_library import PlaylistLibrary
 from .playlists import default_playlist
 from .presets import NAME_MAX, Preset, PresetError, PresetStore, normalize_name
 from .style import Style
@@ -133,9 +136,9 @@ class ModelPicker(ModalScreen[str | None]):
 
     def _show(self, models: list[str]) -> None:
         options = self.query_one(OptionList)
-        options.add_options([Option(m, id=m) for m in models])
+        options.add_options([Option(Text(m), id=m) for m in models])
         options.highlighted = 0
-        self.query_one("#picker-status", Static).update(f"{len(models)} models · current: {model_label(self.shell.model)}")
+        self.query_one("#picker-status", Static).update(Text(f"{len(models)} models · current: {model_label(self.shell.model)}"))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id or None)
@@ -150,32 +153,60 @@ class SaveDialog(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
     DEFAULT_CSS = """
     SaveDialog { align: center middle; }
-    SaveDialog > Vertical { width: 60; height: auto; border: round $primary; padding: 0 1; background: $surface; }
+    SaveDialog > Vertical { width: 60; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto;
+                            border: round $primary; padding: 0 1; background: $surface; }
+    SaveDialog #save-submit { height: 1; min-height: 1; border: none; }
+    SaveDialog #save-playlist { display: none; }
     SaveDialog .heading { color: $primary; text-style: bold; }
     SaveDialog #save-status { color: $text-muted; }
     SaveDialog Input { border: round $panel; background: $surface; }
     SaveDialog Input:focus { border: round $primary; }
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, library: PlaylistLibrary | None = None,
+                 save: Callable[[str | None, str], None] | None = None):
         super().__init__()
-        self.initial = name
+        self.initial, self.save = name, save
+        self.groups = {f"group-{i}": p.name for i, p in enumerate(library.list())} if library else {}
+        self.error = library.error if library else None
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("Save what is playing", classes="heading")
-            yield Input(self.initial, placeholder="Name", max_length=NAME_MAX, id="save-name")
-            yield Static("Enter to save · Esc to cancel", id="save-status")
+            yield Input(self.initial, placeholder="Song name", max_length=NAME_MAX, id="save-name")
+            yield Select([(Text("Saved prompts (legacy)"), "legacy"), (Text("New playlist…"), "new"),
+                          *[(Text(name), key) for key, name in self.groups.items()]],
+                         value="legacy", allow_blank=False, id="save-destination")
+            yield Input(placeholder="New playlist name", max_length=NAME_MAX, id="save-playlist")
+            yield Button("Save (Enter)", id="save-submit")
+            yield Static(Text(self.error or "Enter to save · Esc to cancel"), id="save-status")
 
     def on_mount(self) -> None:
-        self.query_one(Input).focus()
+        self.query_one("#save-name", Input).focus()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        event.stop()
+        self.query_one("#save-playlist", Input).display = event.value == "new"
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()  # otherwise it bubbles to the app and is taken as a mood
+        self._save()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self._save()
+
+    def _save(self) -> None:
         try:
-            self.dismiss(normalize_name(event.value))
+            name = normalize_name(self.query_one("#save-name", Input).value)
+            destination = self.query_one("#save-destination", Select).value
+            group = (normalize_name(self.query_one("#save-playlist", Input).value) if destination == "new"
+                     else self.groups.get(destination))
+            if self.save:
+                self.save(group, name)
+            self.dismiss(name)
         except PresetError as e:
-            self.query_one("#save-status", Static).update(f"[$error]{escape(str(e))}[/]")
+            self.query_one("#save-status", Static).update(Text(f"Could not save: {e}"))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -187,34 +218,53 @@ class PresetPicker(ModalScreen[Preset | None]):
     BINDINGS = [
         Binding("escape", "cancel", "Close"),
         Binding("d,delete", "delete", "Delete"),
+        Binding("backspace", "groups", "Groups"),
+        Binding("c", "continuous", "Continuous from selection"),
         Binding("left", "switch_playlist('my-playlist')", "My playlist", priority=True),
         Binding("right", "switch_playlist('default-playlist')", "Default playlist", priority=True),
     ]
     DEFAULT_CSS = """
     PresetPicker { align: center middle; }
-    PresetPicker > Vertical { width: 72; max-width: 100%; height: auto; max-height: 80%; border: round $primary; padding: 0 1;
+    PresetPicker > Vertical { width: 72; max-width: 100%; height: 80%; border: round $primary; padding: 0 1;
                               background: $surface; }
     PresetPicker .heading { color: $primary; text-style: bold; }
     PresetPicker Tabs { background: $surface; }
     PresetPicker #presets-status { color: $text-muted; }
-    PresetPicker OptionList, PresetPicker OptionList:focus { height: auto; max-height: 20; border: none;
+    PresetPicker #picker-actions { height: 1; }
+    PresetPicker Button { height: 1; min-height: 1; width: auto; border: none; padding: 0 1; }
+    PresetPicker Button:focus { text-style: bold reverse; }
+    PresetPicker OptionList, PresetPicker OptionList:focus { height: 1fr; min-height: 1; border: none;
                                                             background: $surface; }
     """
     EMPTY = "No saved prompts yet — press s to save what is playing"
 
-    def __init__(self, store: PresetStore):
+    def __init__(self, store: PresetStore, library: PlaylistLibrary | None = None):
         super().__init__()
         self.store = store
+        self.library = library if library is not None else PlaylistLibrary()
         self.is_default = False
-        self.defaults = {s.genre: s for s in default_playlist()}
+        self.group: str | None = None
+        self.at_groups = True
+        self.groups: list[str | None] = []
+        self.songs: list[Preset] = []
+        self.selected_index = 0
+        self.continuous = False
+
+    @property
+    def selection_name(self) -> str:
+        return "Default playlist" if self.is_default else self.group or "Saved prompts"
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("Playlist · generative styles, not recordings", classes="heading")
             yield Tabs(Tab("My playlist", id="my-playlist"),
                        Tab("Default playlist", id="default-playlist"), active="my-playlist")
+            yield Static(id="presets-breadcrumb")
             yield Static(id="presets-status")
             yield OptionList(id="presets")
+            with Horizontal(id="picker-actions"):
+                yield Button("< My playlists", id="playlist-back", tooltip="Back to groups (Backspace)")
+                yield Button("Repeat from selection", id="playlist-loop", tooltip="Continuous from selected song (c)")
 
     def on_mount(self) -> None:
         self._populate()
@@ -224,59 +274,103 @@ class PresetPicker(ModalScreen[Preset | None]):
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         self.is_default = event.tab.id == "default-playlist"
+        self.at_groups = not self.is_default
+        self.group = None
         self._populate()
 
     def _populate(self) -> None:
         options = self.query_one(OptionList)
         options.clear_options()
+        error = None
         if self.is_default:
-            options.add_options([Option(Text(f"{s.name} — {s.summary()}"), id=key)
-                                 for key, s in self.defaults.items()])
+            self.songs = [Preset(s.name, s.mood, s, "") for s in
+                          sorted(default_playlist(), key=lambda s: s.name.casefold())]
+        elif self.at_groups:
+            legacy = self.store.list()
+            named = self.library.list()
+            error = self.store.error or self.library.error
+            self.groups = [None, *[p.name for p in named]]
+            options.add_options([Option(Text(f"{name or 'Saved prompts'} ({len(legacy) if name is None else len(named[i - 1].songs)})"),
+                                        id=f"group-{i}") for i, name in enumerate(self.groups)])
+            self.songs = []
         else:
-            options.add_options([Option(Text(f"{p.name} — {p.mood or p.style.summary()}"), id=p.name)
-                                 for p in self.store.list()])
+            self.songs = self.store.list() if self.group is None else self.library.list_songs(self.group)
+            error = self.store.error if self.group is None else self.library.error
+        if not self.at_groups:
+            options.add_options([Option(Text(f"{p.name} — {p.mood or p.style.summary()}"), id=f"song-{i}")
+                                 for i, p in enumerate(self.songs)])
         if options.option_count:
             options.highlighted = 0
-        self._show_status(None if self.is_default else self.store.error)
+        self.query_one("#presets-breadcrumb", Static).update(
+            Text("My playlists" if self.at_groups else f"My playlists / {self.selection_name}"))
+        self.query_one("#playlist-back", Button).display = not self.at_groups and not self.is_default
+        self.query_one("#playlist-loop", Button).disabled = self.at_groups or not self.songs
+        self._show_status(error)
         options.focus()
 
     def _show_status(self, error: str | None = None) -> None:
         if error:
             text = f"[$error]{escape(error)}[/]"
         elif self.is_default:
-            text = "Click / Enter to apply · built-in styles (read-only) · Esc to close"
+            text = "Click / Enter to apply · c repeat from selection · read-only · Esc closes"
+        elif self.at_groups:
+            text = "Click / Enter opens a group · Esc closes"
+            if not self.store.list() and len(self.groups) == 1:
+                text = self.EMPTY + " · try Default playlist"
         elif self.query_one(OptionList).option_count:
-            text = "Click / Enter to apply · d to delete · Esc to close"
+            text = "Click / Enter to apply · c repeat · d deletes song · Backspace groups"
         else:
             text = self.EMPTY + " · try Default playlist"
         self.query_one("#presets-status", Static).update(text + " · Left/Right switch playlists")
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         event.stop()
-        if self.is_default:
-            style = self.defaults[event.option.id]
-            self.dismiss(Preset(style.name, style.mood, style, ""))
+        if self.at_groups:
+            self.group = self.groups[event.option_index]
+            self.at_groups = False
+            self._populate()
             return
-        preset = self.store.get(event.option.id)
-        if preset is None:
-            self._show_status(self.store.error or f"“{event.option.id}” is no longer saved.")
+        self._choose(event.option_index)
+
+    def _choose(self, index: int, continuous: bool = False) -> None:
+        self.selected_index, self.continuous = index, continuous
+        self.dismiss(self.songs[index])
+
+    def action_continuous(self) -> None:
+        index = self.query_one(OptionList).highlighted
+        if self.at_groups or not self.songs or index is None:
+            self._show_status("Select a song inside a playlist first.")
             return
-        self.dismiss(preset)
+        self._choose(index, True)
+
+    def action_groups(self) -> None:
+        if not self.is_default:
+            self.at_groups = True
+            self._populate()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "playlist-back":
+            self.action_groups()
+        elif event.button.id == "playlist-loop":
+            self.action_continuous()
 
     def action_delete(self) -> None:
-        if self.is_default:
+        if self.is_default or self.at_groups:
             return
         options = self.query_one(OptionList)
         if options.highlighted is None:
             return
-        option = options.get_option_at_index(options.highlighted)
+        song = self.songs[options.highlighted]
         try:
-            self.store.delete(option.id)
+            if self.group is None:
+                self.store.delete(song.name)
+            else:
+                self.library.delete(self.group, song.name)
         except PresetError as e:
             self._show_status(str(e))
             return
-        options.remove_option(option.id)
-        self._show_status()
+        self._populate()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -299,7 +393,18 @@ class StreamApp(App):
     #spectrum { height: 1fr; min-height: 5; margin: 1 0; }
     #state { color: $text-muted; }
     #status { margin-top: 1; }
-    #mood { dock: bottom; margin: 0 1 1 1; border: round $panel; background: $surface; }
+    #commands { height: 1; margin: 0 1; overflow-x: auto; overflow-y: hidden; scrollbar-size-horizontal: 0; }
+    #commands Button { height: 1; min-height: 1; min-width: 5; width: auto; border: none;
+                       padding: 0 1; background: $panel; color: $primary; }
+    #commands Button:focus { text-style: bold reverse; }
+    #commands #model-command { min-width: 26; }
+    #commands #continuous { min-width: 7; }
+    Screen.compact #panel { padding: 0 1; margin-top: 0; }
+    Screen.compact #spectrum { margin: 0; }
+    Screen.compact #details, Screen.compact #mood-line, Screen.compact #state,
+    Screen.compact #model, Screen.compact #status { height: 1; }
+    Screen.compact #status { margin-top: 0; }
+    #mood { margin: 0 1 1 1; border: round $panel; background: $surface; }
     #mood:focus { border: round $primary; }
     """
     BINDINGS = [
@@ -309,6 +414,7 @@ class StreamApp(App):
         Binding("m", "pick_model", "Model"),
         Binding("s", "save_preset", "Save"),
         Binding("p", "pick_preset", "Playlist"),
+        Binding("c", "continuous", "Repeat list"),
         Binding("plus,equals_sign", "volume(5)", "Vol +5"),
         Binding("minus", "volume(-5)", "Vol -5"),
         Binding("up", "volume(1)", "Vol +1"),
@@ -323,6 +429,9 @@ class StreamApp(App):
         super().__init__()
         self.player, self.shell, self.initial_mood = player, shell, initial_mood
         self.presets = presets if presets is not None else PresetStore()
+        self.library = PlaylistLibrary()
+        self._selection: tuple[list[Style], int, str] | None = None
+        self._buttons: dict[str, Button] = {}
         self.session_usage: Usage | None = None  # tokens and cost of every successful interpretation so far
         self._keep_playing = False                # `b` leaves the music playing, `q` stops it
         self.register_theme(GENTLEMAN_THEME)
@@ -340,6 +449,18 @@ class StreamApp(App):
             yield Static(id="state")
             yield Static(id="model")
             yield Static("Press / to describe a mood.", id="status")
+        with HorizontalScroll(id="commands"):
+            for id, label, tooltip in (
+                ("play", "⏸", "Play / pause (Space)"), ("next", "⏭", "Next piece (n)"),
+                ("mood-command", "✎", "Describe a mood (/); Enter sends, Esc leaves"),
+                ("model-command", "⚙ default", "Choose mood model (m)"),
+                ("save-command", "💾", "Save audible song (s)"),
+                ("playlist-command", "☷", "Browse playlists (p)"),
+                ("continuous", "↻ off", "Continuous playlist from selection (c)"),
+                ("quieter", "-", "Volume down 5% (-); Down: 1%"),
+                ("louder", "+", "Volume up 5% (+); Up: 1%"),
+            ):
+                yield Button(label, id=id, tooltip=tooltip)
         yield Input(placeholder="Describe a feeling, a concept, a place… then Enter (Esc to leave)", id="mood")
         yield Footer()
 
@@ -348,12 +469,18 @@ class StreamApp(App):
         # when queries would search another screen
         self._w = {name: self.query_one(f"#{name}") for name in ("title", "details", "mood-line", "spectrum",
                                                                  "state", "model", "status")}
+        self._buttons = {b.id: b for b in self.query("#commands Button")}
+        self.screen.set_class(self.size.height <= 24, "compact")
         self.player.start()
         self._show_model()
         self._tick()
         self.set_interval(1 / 15, self._tick)
         if self.initial_mood:
             self._request(self.initial_mood)
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self.screen_stack:
+            self.screen_stack[0].set_class(event.size.height <= 24, "compact")
 
     def on_unmount(self) -> None:
         self.shell.cancel()  # a running gentle-shell would otherwise keep the process alive after quit
@@ -371,36 +498,54 @@ class StreamApp(App):
             self.exit(message="gentle-stream: the music was stopped")
             return
         now, p = self.player.now, self.player
-        w["title"].update(f"♪ {now.style.name}")
-        w["details"].update(now.style.summary())
-        w["mood-line"].update(f"“{now.style.mood}”" if now.style.mood else "")
+        w["title"].update(Text(f"♪ {now.style.name}"))
+        w["details"].update(Text(now.style.summary()))
+        w["mood-line"].update(Text(f"“{now.style.mood}”" if now.style.mood else ""))
         state = "[b $success]▶ Playing[/]" if p.playing else "[b $warning]⏸ Paused[/]"
-        w["state"].update(f"{state} · piece {now.piece} · bar {now.bar + 1} · vol {round(p.volume * 100)}%")
+        audible_name, audible_index = getattr(now, "playlist_name", None), getattr(now, "playlist_index", None)
+        audible = f" · {escape(audible_name)} #{audible_index + 1}" if isinstance(audible_name, str) and isinstance(audible_index, int) else ""
+        w["state"].update(f"{state} · piece {now.piece} · bar {now.bar + 1} · vol {round(p.volume * 100)}%{audible}")
+        self._buttons["play"].label = "⏸" if p.playing else "▶"
+        self._buttons["continuous"].label = "↻ on" if p.continuous is True else "↻ off"
 
     def _show_model(self) -> None:
         session = f" · session: {self.session_usage.format()}" if self.session_usage else ""
         self._w["model"].update(f"model: {escape(model_label(self.shell.model))}{session}")
+        self._w["model"].tooltip = Text(f"model: {model_label(self.shell.model)}{session}")
+        label = self.shell.model or "default"
+        short = label if len(label) <= 22 else label[:10] + "…" + label[-11:]
+        self._buttons["model-command"].label = Text(f"⚙ {short}")
+        self._buttons["model-command"].tooltip = Text(f"Choose mood model (m) · {model_label(self.shell.model)}")
 
     def _status(self, text: str) -> None:
         self._w["status"].update(text)
+        self._w["status"].tooltip = self._w["status"].render()
 
     # ------------------------------------------------------------ actions
     def action_back(self) -> None:
         self._keep_playing = True
         self.exit()
 
-    def action_toggle(self) -> None:
-        self.player.toggle()
+    def _control(self, action: Callable[[], None]) -> bool:
+        """Both keyboard and buttons report rejected controls without claiming success."""
+        try:
+            action()
+        except (ValueError, PlayerError) as e:
+            self._status(f"Could not control playback: {escape(str(e))}")
+            return False
         self._tick()
+        return True
+
+    def action_toggle(self) -> None:
+        self._control(self.player.toggle)
 
     def action_next(self) -> None:
-        self.player.next()
-        self._status("Next piece, same mood.")
+        if self._control(self.player.next):
+            self._status("Next playlist song." if self.player.continuous is True else "Next piece, same mood.")
 
     def action_volume(self, percent: int) -> None:
         """Change the volume by whole percentage points, so repeated steps never drift."""
-        self.player.set_volume((round(self.player.volume * 100) + percent) / 100)
-        self._tick()
+        self._control(lambda: self.player.set_volume((round(self.player.volume * 100) + percent) / 100))
 
     def action_focus_mood(self) -> None:
         self.query_one("#mood", Input).focus()
@@ -419,29 +564,33 @@ class StreamApp(App):
     def action_save_preset(self) -> None:
         style = self.player.now.style  # what is audible, captured before the dialog opens
 
-        def named(name: str | None) -> None:
-            if name is None:
-                return
-            try:
-                preset, replaced = self.presets.save(name, style)
-            except PresetError as e:
-                self._status(f"[$error]Could not save:[/] {escape(str(e))}")
-                return
+        def save(group: str | None, name: str) -> None:
+            preset, replaced = (self.presets.save(name, style) if group is None
+                                else self.library.save(group, name, style))
             self._status(f"{'Replaced' if replaced else 'Saved'} “{escape(preset.name)}”")
 
-        self.push_screen(SaveDialog(style.name), named)
+        self.push_screen(SaveDialog(style.name, self.library, save))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "playlist":
-            self.action_pick_preset()
+        actions = {"playlist": self.action_pick_preset, "play": self.action_toggle,
+                   "next": self.action_next, "mood-command": self.action_focus_mood,
+                   "model-command": self.action_pick_model, "save-command": self.action_save_preset,
+                   "playlist-command": self.action_pick_preset, "continuous": self.action_continuous,
+                   "quieter": lambda: self.action_volume(-5), "louder": lambda: self.action_volume(5)}
+        if action := actions.get(event.button.id):
+            action()
 
     def action_pick_preset(self) -> None:
-        picker = PresetPicker(self.presets)
+        picker = PresetPicker(self.presets, self.library)
 
         def chosen(preset: Preset | None) -> None:
             if preset is None:
                 return
             self.workers.cancel_group(self, "interpret")  # a late interpretation must not override the choice
+            self._selection = ([p.style for p in picker.songs], picker.selected_index, picker.selection_name)
+            if picker.continuous:
+                self._start_continuous()
+                return
             try:
                 self.player.set_style(preset.style)
             except (ValueError, PlayerError) as e:
@@ -452,6 +601,33 @@ class StreamApp(App):
 
         self.push_screen(picker, chosen)
 
+    def _start_continuous(self) -> None:
+        if self._selection is None:
+            self._status("Select a song in Playlist (p), then enable repeat (c).")
+            return
+        styles, index, name = self._selection
+        self.workers.cancel_group(self, "interpret")
+        try:
+            self.player.set_playlist(styles, start_index=index, name=name, continuous=True)
+            self.player.play()
+        except (ValueError, PlayerError) as e:
+            self._status(f"Could not enable continuous playback: {escape(str(e))}")
+            return
+        self._status(f"Continuous from {escape(styles[index].name)} · {escape(name)}")
+        self._tick()
+
+    def action_continuous(self) -> None:
+        if self.player.continuous is not True:
+            self._start_continuous()
+            return
+        try:
+            self.player.set_continuous(False)
+        except (ValueError, PlayerError) as e:
+            self._status(f"Could not disable continuous playback: {escape(str(e))}")
+            return
+        self._status("Continuous off · current audio continues.")
+        self._tick()
+
     # ------------------------------------------------------------ mood interpretation
     def on_input_submitted(self, event: Input.Submitted) -> None:
         mood = event.value.strip()
@@ -461,7 +637,7 @@ class StreamApp(App):
             self._request(mood)
 
     def _request(self, mood: str) -> None:
-        self._status(f"Interpreting “{mood}” with {model_label(self.shell.model)}…")
+        self._status(f"Interpreting “{escape(mood)}” with {escape(model_label(self.shell.model))}…")
         self._interpret(mood)
 
     @work(thread=True, exclusive=True, group="interpret")

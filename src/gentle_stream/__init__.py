@@ -7,13 +7,18 @@ import sys
 
 CONTROLS = """controls:
   space    play / pause
-  n        next piece with the same mood
+  n        next piece with the same mood (next song during continuous playback)
   /        describe a mood (feeling, concept, place...), Enter to send, Esc to leave
   m        choose the model Gentle Shell uses
-  s        save what is playing under a name (prompt and style)
+  s        save what is playing: Saved prompts, new playlist, or existing playlist
   p        Playlist (also clickable): My playlist / Default playlist
+           My playlist opens groups, then songs in the same panel; Backspace goes back
            Left/Right switch playlists; Up/Down highlight entries
-           click or Enter applies; d deletes only saved entries; Esc closes
+           click or Enter applies; d deletes only saved songs; Esc closes
+  c        continuous playlist from the selected song; toggle off without restarting audio
+           picker: c or Repeat from selection starts the full list at the highlighted song
+  clickable command strip above the mood input uses icons for these actions; Tab focuses buttons.
+  model button shows the chosen model (or honest Gentle Shell default); hover for full labels.
   + / -    volume up / down by 5%
   ↑ / ↓    volume up / down by 1%
   b        back: leave the app, the music keeps playing
@@ -37,6 +42,9 @@ optional integrated background voice:
   without 'agrega frases', voice stays off. See docs/integrated-voice.md for local setup.
 
 saved prompts live in $XDG_CONFIG_HOME/gentle-stream/presets.json (default ~/.config/gentle-stream/).
+named playlists live separately in the same directory's playlist-library.json; no migration.
+continuous playback wraps in alphabetical display order, stays in the background after b,
+and uses saved styles without model calls. A normal song or mood selection exits continuous mode.
 
 sampled instruments (optional):
   gentle-stream setup-samples downloads the FluidR3_GM soundfont (MIT) once into the user cache;

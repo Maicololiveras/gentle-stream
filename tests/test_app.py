@@ -293,7 +293,11 @@ async def test_a_failed_interpretation_adds_nothing_to_the_session(store):
         assert "boom" in text(app, "#status")
         assert "session: 17.7k tokens · $0.0008" in text(app, "#model")
         store.save("Rain", RAIN)
-        await pilot.press("p", "enter")                  # applying a saved prompt is free
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("enter")  # Saved prompts group
+        await pilot.pause()
+        await pilot.press("enter")  # applying a saved prompt is free
         await pilot.pause(0.1)
         assert "session: 17.7k tokens · $0.0008" in text(app, "#model")
 
@@ -383,6 +387,8 @@ async def test_p_applies_a_saved_prompt_instantly_without_gentle_shell(store):
         await pilot.press("p")
         await pilot.pause(0.1)
         assert isinstance(app.screen, PresetPicker)
+        await pilot.press("enter")  # Saved prompts group
+        await pilot.pause()
         listed = str(app.screen.query_one("OptionList").get_option_at_index(1).prompt)
         assert "Rainy Café" in listed and "rainy night in a small café" in listed
         await pilot.press("down", "enter")             # Archive, Rainy Café
@@ -404,7 +410,9 @@ async def test_d_deletes_the_highlighted_preset(store):
     app, _ = make_app(FakeShell(), presets=store)
     async with app.run_test() as pilot:
         await pilot.press("p")
-        await pilot.pause(0.1)
+        await pilot.pause()
+        await pilot.press("enter")  # Saved prompts group
+        await pilot.pause()
         await pilot.press("d")
         await pilot.pause(0.1)
         assert [p.name for p in store.list()] == ["Rainy Café"]

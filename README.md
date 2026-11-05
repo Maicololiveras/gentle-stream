@@ -85,7 +85,7 @@ The engine renders one bar at a time, with note tails ringing into the next bar,
 
 ### Saved prompts — Keep what you love
 
-Press `s` to save what is playing under a name. gentle-stream stores the prompt **and the musical parameters it produced**, so clicking **Playlist** (or pressing `p`) later brings that sound back instantly, with no model call. **My playlist** contains your saved styles; **Default playlist** contains built-in styles for all ten genres, including the starting **Midnight Rain** lo-fi style. These are generative styles, not prerecorded songs: every piece is still newly generated.
+Press `s` to save the audible song to **Saved prompts**, a **new playlist**, or an **existing playlist**. The prompt and musical parameters are stored, so **Playlist** (`p`) brings that sound back without a model call. **My playlist** opens groups, then their songs in the same panel; **Default playlist** remains a read-only built-in list. Choose **Repeat from selection** to play the full list continuously, starting at the highlighted song and wrapping in alphabetical display order. These are generative styles, not recordings. See [Playlist controls](docs/playlist-controls.md).
 
 ---
 
@@ -174,14 +174,22 @@ Model extensions stay enabled on purpose: some providers (such as `claude-bridge
 
 ## Controls
 
+The compact clickable command strip sits between the spectrum panel and mood input.
+Tab focuses its buttons; tooltips show full action labels and shortcuts. The model button
+shows the chosen model (or Gentle Shell default), with long IDs elided safely. On narrow
+terminals, focus/scroll horizontally to reach the remaining commands. Icons include
+**⏸ / ▶** play/pause, **⏭** Next, **✎** mood, **⚙** model, **💾** save,
+**☷** playlists and **↻ off/on** continuous playback.
+
 | Key | Action |
 | :--- | :--- |
-| `space` | Play / pause (smooth fade, no clicks) |
-| `n` | Next piece with the same mood: new key, progression, melody and groove |
+| `space` | Play / pause; sounddevice fades smoothly, while Windows cuts the owned output to discard buffered audio (a hard cut may click) |
+| `n` | Next piece with the same mood, or next song when continuous playback is on |
 | `/` | Describe a mood; `Enter` sends it, `Esc` leaves the input |
 | `m` | Choose the model Gentle Shell uses (listed from `gentle-shell -- --list-models`); `Enter` picks, `Esc` keeps the current one |
-| `s` | Save what is playing under a name; `Enter` saves (an existing name is replaced), `Esc` cancels |
-| `p` / click **Playlist** | Open **My playlist** / **Default playlist**; Left/Right switch playlists (or click a section), then click an entry or press `Enter` to apply; `d` / `Delete` removes only saved entries; `Esc` closes |
+| `s` | Save the audible song to Saved prompts, new, or existing playlist; `Enter` saves, `Esc` cancels; replacement is scoped to that group |
+| `p` / click **Playlist** | Open **My playlist** groups / **Default playlist**; Left/Right switch tabs, click/Enter opens a group or applies a song; Backspace returns to groups; `d` / `Delete` removes only saved songs; `Esc` closes |
+| `c` / **↻ off/on** | Toggle continuous playback from the selected song; in the picker, **Repeat from selection** starts at the highlighted song |
 | `+` / `-` | Volume up / down by 5% |
 | `↑` / `↓` | Volume up / down by 1% |
 | `b` | Back: leave the app and keep the music playing in the background |
@@ -266,12 +274,12 @@ The cost is the one Gentle Shell reports, in US dollars. Providers used through 
 
 | | |
 | :--- | :--- |
-| **Save** | `s`, type a name (up to 40 characters), `Enter` |
-| **Apply** | Click **Playlist** or press `p`, choose **My playlist**, click an entry or press `Enter` — starts at the next bar |
+| **Save** | `s`, song name (up to 40 characters), destination (Saved prompts by default, New playlist, or existing named group), `Enter`; New reveals a playlist name field |
+| **Apply** | Click **Playlist** or press `p`, choose **My playlist**, open a group, click/Enter a song — starts at the next bar and exits rotation |
 | **Built-ins** | Choose **Default playlist** for genre styles without a model call; entries cannot be deleted and browsing/applying them never changes your saved file |
 | **Keyboard** | Left/Right switch playlists even while the entry list is focused or empty; Up/Down highlight entries; `Enter` applies, `Esc` closes |
 | **Delete** | In **My playlist**, highlight one, `d` or `Delete` |
-| **File** | `~/.config/gentle-stream/presets.json` (or `$XDG_CONFIG_HOME/gentle-stream/presets.json`) |
+| **Files** | Legacy `~/.config/gentle-stream/presets.json` stays unchanged; named groups use separate `playlist-library.json` in the same directory (respects `$XDG_CONFIG_HOME`) |
 | **Format** | Plain JSON with the prompt and its musical parameters, rewritten atomically |
 | **Safety** | An unreadable file is reported and never overwritten; invalid entries are skipped; every value is validated like a model answer, so a hand-edited file still plays |
 

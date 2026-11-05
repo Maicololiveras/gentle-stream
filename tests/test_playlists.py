@@ -1,4 +1,4 @@
-"""Playlist behavior with no audio device, model calls or pytest dependency."""
+"""Playlist behavior with no audio device or model calls."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,13 +16,13 @@ from gentle_stream.style import DEFAULT, Style
 class PlaylistTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        # Retain owned scratch for orchestrator-approved cleanup.
         cls.root = Path(tempfile.mkdtemp(prefix="gentle-stream-playlists-"))
         print(f"Retained test scratch: {cls.root}", flush=True)
 
     def setUp(self):
         self.store = PresetStore(self.root / f"{self._testMethodName}.json")
-        self.player = Mock(now=SimpleNamespace(style=DEFAULT, piece=1, bar=0), playing=True, volume=0.8)
+        self.player = Mock(now=SimpleNamespace(style=DEFAULT, piece=1, bar=0), playing=True, volume=0.8,
+                           continuous=False)
         self.player.spectrum.side_effect = lambda width: np.zeros(width)
         self.shell = Mock(model=None)
         self.app = StreamApp(self.player, self.shell, presets=self.store)
@@ -34,7 +34,6 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_builtin_content_is_registry_based_and_includes_actual_default(self):
         from gentle_stream.playlists import default_playlist
-
         styles = default_playlist()
         self.assertEqual(tuple(s.genre for s in styles), NAMES)
         self.assertEqual(styles[0], DEFAULT)
@@ -46,16 +45,17 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(style.mode, genre.modes[0])
 
     async def test_main_click_opener_empty_saved_switch_and_click_default(self):
+        from gentle_stream.playlists import default_playlist
         async with self.app.run_test(size=(80, 24)) as pilot:
             self.assertTrue(await pilot.click("#playlist"))
-            await pilot.pause()  # drain the newly pushed screen's mount/populate messages
+            await pilot.pause()
             self.assertIsInstance(self.app.screen, PresetPicker)
             self.assertIn("No saved prompts yet", str(self.app.screen.query_one("#presets-status").render()))
             self.assertTrue(await pilot.click("#default-playlist"))
             options = self.app.screen.query_one("OptionList")
+            styles = sorted(default_playlist(), key=lambda s: s.name.casefold())
             self.assertEqual(options.option_count, len(NAMES))
-            from gentle_stream.playlists import default_playlist
-            for index, style in enumerate(default_playlist()):
+            for index, style in enumerate(styles):
                 self.assertIn(style.name, str(options.get_option_at_index(index).prompt))
             self.assertEqual(str(self.app.screen.query_one("#my-playlist").label), "My playlist")
             self.assertEqual(str(self.app.screen.query_one("#default-playlist").label), "Default playlist")
@@ -63,7 +63,7 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(options.option_count, len(NAMES))
             self.assertFalse(self.store.path.exists())
             self.assertTrue(await pilot.click("#presets", offset=(2, 1)))
-            self.player.set_style.assert_called_once_with(DEFAULT)
+            self.player.set_style.assert_called_once_with(styles[0])
             self.assertFalse(self.store.path.exists())
             self.assert_no_ai()
 
@@ -72,10 +72,13 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
         before = self.store.path.read_bytes()
         async with self.app.run_test() as pilot:
             await pilot.press("p")
+            await pilot.pause()
             self.assertTrue(await pilot.click("#default-playlist"))
             await pilot.press("d", "delete")
             self.assertEqual(self.store.path.read_bytes(), before)
             self.assertTrue(await pilot.click("#my-playlist"))
+            await pilot.press("enter")  # explicit legacy group
+            await pilot.pause()
             self.assertIn("My rain", str(self.app.screen.query_one("OptionList").get_option_at_index(0).prompt))
             self.assertTrue(await pilot.click("#presets", offset=(2, 0)))
             self.player.set_style.assert_called_once_with(saved.style)
@@ -91,11 +94,12 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
                 app = StreamApp(self.player, self.shell, presets=self.store)
                 async with app.run_test() as pilot:
                     await pilot.press("p")
+                    await pilot.pause()
                     options = app.screen.query_one("OptionList")
                     tabs = app.screen.query_one("Tabs")
                     self.assertIs(app.focused, options)
                     self.assertEqual(tabs.active, "my-playlist")
-                    self.assertEqual(options.option_count, int(populated))
+                    self.assertEqual(options.option_count, 1)  # Saved prompts, even when empty
                     await pilot.press("right")
                     self.assertEqual(tabs.active, "default-playlist")
                     self.assertEqual(options.option_count, len(NAMES))
@@ -108,9 +112,9 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(tabs.active, "default-playlist")
                     await pilot.press("left")
                     self.assertEqual(tabs.active, "my-playlist")
-                    self.assertEqual(options.option_count, int(populated))
+                    self.assertEqual(options.option_count, 1)
                     await pilot.press("left")
-                    self.assertEqual(tabs.active, "my-playlist")
+                    self.assertEqual(options.option_count, 1)
                     tabs.focus()
                     await pilot.press("right")
                     self.assertEqual(tabs.active, "default-playlist")
@@ -130,14 +134,18 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
         saved, _ = self.store.save("My rain", Style(mood="quiet rain"))
         async with self.app.run_test() as pilot:
             await pilot.press("p")
-            await pilot.pause()  # the picker must mount and highlight before Enter
+            await pilot.pause()
             self.assertIsInstance(self.app.screen, PresetPicker)
+            await pilot.press("enter")
+            await pilot.pause()
             options = self.app.screen.query_one("OptionList")
             self.assertEqual(options.option_count, 1)
             self.assertEqual(options.highlighted, 0)
             await pilot.press("enter")
             self.player.set_style.assert_called_once_with(saved.style)
             await pilot.press("p")
+            await pilot.pause()
+            await pilot.press("enter")
             await pilot.pause()
             await pilot.press("d")
             self.assertEqual(self.store.list(), [])
@@ -148,6 +156,7 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
     async def test_save_still_uses_audible_style_and_existing_format(self):
         async with self.app.run_test() as pilot:
             await pilot.press("s")
+            await pilot.pause()
             self.app.screen.query_one("Input").value = "My rain"
             await pilot.press("enter")
             self.assertEqual(self.store.get("My rain").style,
@@ -156,11 +165,11 @@ class PlaylistTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_default_keyboard_apply_and_small_terminal(self):
         from gentle_stream.playlists import default_playlist
-
         async with self.app.run_test(size=(60, 20)) as pilot:
             await pilot.press("p")
+            await pilot.pause()
             self.assertTrue(await pilot.click("#default-playlist"))
             await pilot.press("down", "enter")
-            self.player.set_style.assert_called_once_with(default_playlist()[1])
+            self.player.set_style.assert_called_once_with(sorted(default_playlist(), key=lambda s: s.name.casefold())[1])
             self.assertFalse(self.store.path.exists())
             self.assert_no_ai()
