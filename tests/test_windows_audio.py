@@ -4,6 +4,7 @@ import io
 import json
 import os
 import subprocess
+import struct
 import threading
 import time
 import unittest
@@ -22,20 +23,30 @@ from gentle_stream import _windows_output_host as host
 
 class PipeProcess:
     """Local pipe stands in for the interop supervisor; no process or audio device."""
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, ack_transform=lambda op, seq: struct.pack('!cI', op, seq), **kwargs):
         read, write = os.pipe()
         self.stdin = os.fdopen(write, 'wb', buffering=0)
+        ack_read, ack_write = os.pipe()
+        self.stdout = os.fdopen(ack_read, 'rb', buffering=0)
         self.data = bytearray()
         self.ready = threading.Event()
         self.returncode = None
         def consume():
             try:
-                while part := os.read(read, 8192):
-                    self.data.extend(part)
-                    if len(self.data) >= 1024:
-                        self.ready.set()
+                source = os.fdopen(read, 'rb', buffering=0)
+                while raw := host._read(source, 9):
+                    op, sequence, size = struct.unpack('!cII', raw)
+                    payload = host._read(source, size) if size else b''
+                    if op == b'D':
+                        self.data.extend(payload)
+                        if len(self.data) >= 1024:
+                            self.ready.set()
+                    ack = ack_transform(op, sequence)
+                    if ack:
+                        os.write(ack_write, ack)
             finally:
-                os.close(read)
+                os.close(ack_write)
+                source.close()
                 if self.returncode is None:
                     self.returncode = 0
         self.reader = threading.Thread(target=consume, daemon=True)
@@ -47,6 +58,12 @@ class PipeProcess:
         if self.reader.is_alive():
             raise subprocess.TimeoutExpired('fake supervisor', timeout)
         return self.returncode
+
+
+class BinaryOutput(io.StringIO):
+    def __init__(self):
+        super().__init__()
+        self.buffer = io.BytesIO()
 
 
 class Engine:
@@ -85,6 +102,28 @@ class WindowsAudioTests(unittest.TestCase):
         self.assertEqual(argv[0], 'python.exe')
         self.assertEqual(argv[-2:], ['C:/ffplay.exe', '1000'])
         self.assertFalse(spawn.call_args.kwargs.get('shell', False))
+
+    def test_malformed_acknowledgments_fail_closed_and_stop_owned_transport(self):
+        cases = [(lambda op, seq: struct.pack('!cI', b'X', seq), 'Invalid'),
+                 (lambda op, seq: struct.pack('!cI', b'R', seq), 'Mismatched'),
+                 (lambda op, seq: struct.pack('!cI', op, seq + 1), 'Invalid'),
+                 (lambda op, seq: b'', 'timed out')]
+        for transform, message in cases:
+            with self.subTest(message=message):
+                proc = PipeProcess(ack_transform=transform)
+                with patch('gentle_stream.windows_audio._executables', return_value=('fake', 'fake')), \
+                     patch('gentle_stream.windows_audio.subprocess.Popen', return_value=proc):
+                    stream = WindowsPCMStream(samplerate=1000, channels=2, dtype='float32',
+                                              blocksize=64, callback=lambda out, *args: out.fill(.25))
+                    started = time.monotonic()
+                    stream.start()
+                    stream._thread.join(timeout=5)
+                    stream.close()
+                    self.assertLess(time.monotonic() - started, 5)
+                    self.assertIn(message, stream.error)
+                    self.assertFalse(proc.reader.is_alive())
+                    self.assertTrue(proc.stdin.closed)
+                    self.assertTrue(proc.stdout.closed)
 
     def test_startup_pipe_failure_closes_owned_supervisor_input(self):
         proc = PipeProcess()
@@ -133,9 +172,10 @@ class WindowsAudioTests(unittest.TestCase):
             native.returncode = 1
         native.terminate = terminate
         native.wait = lambda timeout=None: native.returncode
-        out, err = io.StringIO(), io.StringIO()
+        out, err = BinaryOutput(), io.StringIO()
+        payload = struct.pack('!cII', b'D', 1, 1024) + bytes(1024)
         with patch.object(host.subprocess, 'Popen', return_value=native) as spawn, \
-             patch.object(host.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(bytes(1024)))), \
+             patch.object(host.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(payload))), \
              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             self.assertEqual(host.main(['C:/ffplay.exe', '44100']), 1)
         self.assertTrue(native.terminated)
@@ -160,7 +200,7 @@ class WindowsAudioTests(unittest.TestCase):
             try:
                 player.pause()
                 player.start()
-                self.assertTrue(proc.ready.wait(2))
+                self.assertTrue(player._stream._paused.is_set())
                 self.assertEqual(player.position, 0)
                 self.assertIsNone(player.output_underflows)
                 np.testing.assert_array_equal(np.frombuffer(proc.data, dtype='<f4'), 0)
@@ -206,6 +246,8 @@ class WindowsAudioTests(unittest.TestCase):
 
     def test_native_supervisor_copies_bytes_without_speech_or_extra_processes(self):
         class Collector(io.BytesIO):
+            def write(self, data):
+                return super().write(data[:7])  # Real partial sink writes must preserve every byte.
             def close(self):
                 self.closed_bytes = self.getvalue()
         sink = Collector()
@@ -216,12 +258,14 @@ class WindowsAudioTests(unittest.TestCase):
             return 0
         native.wait = wait
         payload = np.full((128, 2), .25, dtype='<f4').tobytes()
-        out, err = io.StringIO(), io.StringIO()
+        out, err = BinaryOutput(), io.StringIO()
+        framed = struct.pack('!cII', b'D', 1, len(payload)) + payload
         with patch.object(host.subprocess, 'Popen', return_value=native) as spawn, \
-             patch.object(host.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(payload))), \
+             patch.object(host.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(framed))), \
              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             self.assertEqual(host.main(['C:/ffplay with spaces.exe', '44100']), 0)
         self.assertEqual(sink.closed_bytes, payload)
+        self.assertEqual(out.buffer.getvalue(), struct.pack('!cI', b'D', 1))
         self.assertEqual(out.getvalue(), '')
         self.assertEqual(err.getvalue(), '')
         self.assertEqual(spawn.call_count, 1)

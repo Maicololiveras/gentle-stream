@@ -18,7 +18,9 @@ class IndependentT6(unittest.TestCase):
     def test_stop_cancels_full_pipe_without_native_process(self):
         read, write = os.pipe()
         sink = os.fdopen(write, 'wb', buffering=0)
-        proc = SimpleNamespace(stdin=sink, poll=lambda: 0 if sink.closed else None,
+        ack_read, ack_write = os.pipe()
+        source = os.fdopen(ack_read, 'rb', buffering=0)
+        proc = SimpleNamespace(stdin=sink, stdout=source, poll=lambda: 0 if sink.closed else None,
                                wait=lambda timeout=None: 0)
         try:
             with patch('gentle_stream.windows_audio._executables', return_value=('fake.exe', 'fake.exe')), \
@@ -38,6 +40,8 @@ class IndependentT6(unittest.TestCase):
                 self.assertIsNone(stream.error)
         finally:
             sink.close()
+            source.close()
+            os.close(ack_write)
             os.close(read)
 
     def test_invalid_supervisor_rate_never_spawns(self):

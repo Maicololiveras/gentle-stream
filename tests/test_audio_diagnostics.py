@@ -167,27 +167,23 @@ class AudioDiagnosticsTests(unittest.TestCase):
 
 
 def test_pause_ack_vs_windows_queued_pcm_diagnostic(monkeypatch):
-    """Reproduce downstream backlog, not speaker latency; no subprocess or actual device."""
-    import io
-    from gentle_stream.windows_audio import WindowsPCMStream
+    """Legacy raw-output model, not the new Windows cut/ACK or speaker latency.
 
+    The owned transport cut is asserted through Player/real supervisor pipes in
+    test_pause_output.py. Keep this counterexample: callback silence alone never
+    proves that already-submitted PCM was flushed.
+    """
     player = Player(FakeEngine())
     player.next()
     submitted = []
     acknowledged = []
-    monkeypatch.setattr("gentle_stream.windows_audio._executables", lambda: ("unused", "unused"))
-    stream = WindowsPCMStream(samplerate=44100, channels=2, dtype="float32", blocksize=256,
-                              callback=player._callback)
-    class Steps:
-        def wait(self, timeout):
-            if len(submitted) == 8 and not acknowledged:
-                response = daemon.handle(player, {"cmd": "pause"})
-                acknowledged.append((response, player.position))
-            return len(submitted) >= 16
-    stream._stop = Steps()
-    stream._process = SimpleNamespace(stdin=io.BytesIO(), wait=lambda timeout: 0)
-    monkeypatch.setattr(stream, "_write", lambda data: submitted.append(np.frombuffer(data, dtype="<f4").copy()))
-    stream._run()  # deterministic output scheduler, no wall-clock wait or process
+    for index in range(16):
+        if index == 8:
+            response = daemon.handle(player, {"cmd": "pause"})
+            acknowledged.append((response, player.position))
+        audio = np.empty((256, 2), dtype=np.float32)
+        player._callback(audio, 256, None, None)
+        submitted.append(audio.reshape(-1).copy())
     response, position_at_ack = acknowledged[0]
     assert response["ok"] and response["state"]["playing"] is False
     assert position_at_ack == 2048
@@ -204,7 +200,7 @@ def test_pause_ack_vs_windows_queued_pcm_diagnostic(monkeypatch):
         player._callback(out, 256, None, None)
         assert not np.any(out)
     assert (player.position, player.now) == held
-    print(f"pause ACK after {position_at_ack} queued frames; simulated downstream nonzero frames="
+    print(f"legacy raw pause ACK after {position_at_ack} queued frames; simulated downstream nonzero frames="
           f"{queued_nonzero_frames}; already-sent PCM not flushed; acoustic latency unmeasured")
     player.close()
 

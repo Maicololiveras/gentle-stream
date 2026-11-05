@@ -44,12 +44,31 @@ checkout's existing `.voice-venv/Scripts/python.exe` is tried automatically, the
 `ffplay.exe` on PATH or the explicit variable above. WSL interop must be enabled.
 The isolated voice environment is optional; Windows audio does not import Edge TTS.
 
-Play/pause, volume, next, mood changes and detach keep their existing behavior.
-A paced writer limits audio buffering; output-device latency may still delay a
-control slightly. A Windows supervisor owns FFplay and closes it on input EOF or
-failure. It does not use a Linux PID to kill a Windows process or kill other apps.
-An output failure is reported in the player log and `ctl status`; no silent
-fallback or automatic restart is performed.
+**Pause cuts the owned output queue before acknowledging success.** The Windows
+supervisor terminates and waits for its own FFplay child, discarding that child's
+queued PCM. While paused, the stream makes no callbacks or PCM submissions.
+Play/toggle resumes with a fresh owned FFplay child and the next retained Player
+samples, preserving volume, position and playlist selection. It does not restart
+the music daemon, clear the playlist, replay discarded output, change system
+volume, or control other audio applications. Resume may take time to open the
+native device again; a hard output cut can click. The default sounddevice path
+retains its existing short gain fade.
+
+This is an **owned-process stop boundary, not zero speaker latency**: Windows,
+device and hardware buffers may still have an audible tail. Player position and
+`now` describe callback-consumed PCM, not a measurement at the speakers. Up to an
+in-flight callback block can have been consumed before the cut and is not rewound.
+Device-free tests prove the owned child stopped before acknowledgment, including
+under pipe backpressure; they do not measure acoustic latency.
+
+The private transport uses bounded frames (at most 8192 PCM bytes), one outstanding
+PCM acknowledgment, and pause/resume acknowledgments. Each pipe write has a
+two-second deadline and each acknowledgment a three-second deadline. Invalid or
+truncated messages and output failures fail visibly through the control call,
+player log and `ctl status`; no silent fallback or automatic recovery is performed.
+All process operations run outside the audio callback. EOF/failure still cleans up
+the owned native child, using its native Popen handle rather than a Linux PID,
+global process search or taskkill. The protocol accepts no paths or commands.
 
 `gentle-stream ctl status` adds `audio_output: "windows"` and
 `audio_output_error` for this mode. `output_underflows` is **null**, because this

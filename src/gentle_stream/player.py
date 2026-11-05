@@ -70,6 +70,7 @@ class Player:
         self._stopping = threading.Event()
         self._producer = threading.Thread(target=self._produce, name="gentle-stream-producer", daemon=True)
         self._stream = None
+        self._control_lock = threading.RLock()  # Stream hooks run here, never in the callback.
         self.playing = True
         self.volume = float(np.clip(volume, 0, 1))
         self._gain = 0.0
@@ -98,25 +99,46 @@ class Player:
         while self._buffered == 0 and self._producer.is_alive() and time.monotonic() < deadline:
             time.sleep(0.005)    # the first bar is ready before the device starts pulling
         self._stream.start()
+        if not self.playing and callable(getattr(self._stream, 'pause', None)):
+            self._stream.pause()
 
     def close(self) -> None:
-        self._stopping.set()
-        self._wake.set()
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-        if self._producer.is_alive():
-            self._producer.join(timeout=5)
+        with self._control_lock:
+            self._stopping.set()
+            self._wake.set()
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream.close()
+            if self._producer.is_alive():
+                self._producer.join(timeout=5)
 
     # ------------------------------------------------------------ controls
     def play(self) -> None:
-        self.playing = True
+        with self._control_lock:
+            resume = getattr(self._stream, 'resume', None)
+            self.playing = True
+            if callable(resume):
+                try:
+                    resume()
+                except Exception:
+                    self.playing = False
+                    raise
 
     def pause(self) -> None:
-        self.playing = False
+        with self._control_lock:
+            pause = getattr(self._stream, 'pause', None)
+            if callable(pause):
+                # The transport stops callbacks and confirms the owned sink cut
+                # before success. Queue/position/playlist metadata stay intact.
+                pause()
+                self._gain = 0.0
+                self.level = 0.0
+                self._tail[:] = 0
+            self.playing = False
 
     def toggle(self) -> None:
-        self.playing = not self.playing
+        with self._control_lock:
+            self.pause() if self.playing else self.play()
 
     def set_volume(self, volume: float) -> None:
         self.volume = float(np.clip(volume, 0, 1))

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import select
 import shutil
+import struct
 import subprocess
 import sys
 import threading
@@ -56,6 +57,13 @@ class WindowsPCMStream:
         self._python, self._ffplay = _executables()
         self._rate, self._frames, self._callback = samplerate, blocksize, callback
         self._stop = threading.Event()
+        self._paused = threading.Event()
+        self._controls = threading.Lock()
+        self._send = threading.Lock()
+        self._receive = threading.Lock()
+        self._sequence = 0
+        self._generation = 0
+        self._acks = bytearray()
         self._process = None
         self._thread = None
         self.error = None
@@ -66,49 +74,152 @@ class WindowsPCMStream:
         host = Path(__file__).with_name('_windows_output_host.py').read_text(encoding='utf-8')
         self._process = subprocess.Popen(
             [self._python, '-I', '-B', '-u', '-c', host, self._ffplay, str(self._rate)],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, bufsize=0)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
         try:
             os.set_blocking(self._process.stdin.fileno(), False)
+            os.set_blocking(self._process.stdout.fileno(), False)
             self._thread = threading.Thread(target=self._run, daemon=True, name='gentle-stream-windows')
             self._thread.start()
         except Exception:
             self._thread = None
             self._process.stdin.close()
-            self._process.wait(timeout=6)
+            try:
+                self._process.wait(timeout=6)
+            finally:
+                self._process.stdout.close()
             raise
 
     def _write(self, data):
         fd = self._process.stdin.fileno()
         view = memoryview(data)
-        while view and not self._stop.is_set():
+        deadline = time.monotonic() + 2
+        while view:
+            if self._stop.is_set():
+                raise InterruptedError('Windows output stopped')
             if self._process.poll() is not None:
                 raise BrokenPipeError('Windows audio supervisor exited; see player.log')
-            if not select.select([], [fd], [], .05)[1]:
+            if time.monotonic() >= deadline:
+                raise TimeoutError('Windows audio write timed out')
+            if not select.select([], [fd], [], .02)[1]:
                 continue
             try:
                 count = os.write(fd, view[:select.PIPE_BUF])
             except BlockingIOError:
                 continue
+            if not count:
+                raise BrokenPipeError('Windows audio input closed')
             view = view[count:]
 
+    def _packet(self, op, data=b''):
+        # Caller holds _send. A bounded frame is never interleaved with a control.
+        self._sequence += 1
+        self._write(struct.pack('!cII', op, self._sequence, len(data)) + data)
+        return self._sequence
+
+    def _ack(self, op, sequence, generation=None):
+        deadline = time.monotonic() + 3
+        with self._receive:
+            fd = self._process.stdout.fileno()
+            while not self._stop.is_set():
+                if op == b'D' and (self._paused.is_set() or generation != self._generation):
+                    return  # Yield the ACK reader to the pause controller.
+                if len(self._acks) == 5:
+                    got_op, got_sequence = struct.unpack('!cI', self._acks)
+                    self._acks.clear()
+                    if got_op == b'E':
+                        raise OSError('Windows native output write failed')
+                    if got_op not in (b'D', b'P', b'R') or got_sequence > sequence:
+                        raise OSError('Invalid Windows output acknowledgment')
+                    if got_sequence == sequence:
+                        if got_op != op:
+                            raise OSError('Mismatched Windows output acknowledgment')
+                        return
+                    continue  # A data ACK overtaken by a pause is obsolete.
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Windows output acknowledgment timed out')
+                if select.select([fd], [], [], .02)[0]:
+                    part = os.read(fd, 5 - len(self._acks))
+                    if not part:
+                        raise BrokenPipeError('Windows audio acknowledgment pipe closed')
+                    self._acks.extend(part)
+            raise InterruptedError('Windows output stopped')
+
+    def _control(self, op):
+        if self._process is None:
+            return
+        if self.error or self._stop.is_set():
+            raise ValueError(self.error or 'Windows output is closed')
+        try:
+            with self._send:
+                sequence = self._packet(op)
+            self._ack(op, sequence)
+        except Exception as error:
+            self.error = str(error)
+            self._stop.set()
+            # Existing public handlers return ValueError messages to clients;
+            # keep their connection alive rather than implying the daemon vanished.
+            raise ValueError(f'Windows output control failed: {error}') from error
+
+    def pause(self):
+        with self._controls:
+            if self._paused.is_set():
+                if self.error:
+                    raise ValueError(self.error)
+                return
+            self._paused.set()  # Stop callbacks before waiting on the native cut.
+            self._generation += 1
+            self._control(b'P')
+
+    def resume(self):
+        with self._controls:
+            if not self._paused.is_set():
+                if self.error:
+                    raise ValueError(self.error)
+                return
+            self._control(b'R')
+            self._paused.clear()
+
     def _run(self):
+        # Split large callback blocks into bounded packets; only one data ACK can
+        # be outstanding, so a blocked sink cannot bury P behind a PCM backlog.
         audio = np.empty((self._frames, 2), dtype=np.float32)
         period, deadline = self._frames / self._rate, time.monotonic()
         try:
             while not self._stop.wait(max(0., deadline - time.monotonic())):
-                self._callback(audio, self._frames, None, None)
-                self._write(audio.astype('<f4', copy=False).tobytes())
-                deadline = max(deadline + period, time.monotonic())  # Never burst to catch up.
+                if self._paused.is_set():
+                    self._stop.wait(.01)
+                    deadline = time.monotonic()
+                    continue
+                with self._send:
+                    if self._paused.is_set():
+                        continue
+                    self._callback(audio, self._frames, None, None)
+                    generation = self._generation
+                data = audio.astype('<f4', copy=False).tobytes()
+                for offset in range(0, len(data), 8192):
+                    with self._send:
+                        if self._paused.is_set() or self._stop.is_set() or generation != self._generation:
+                            break
+                        sequence = self._packet(b'D', data[offset:offset + 8192])
+                    self._ack(b'D', sequence, generation)
+                deadline = max(deadline + period, time.monotonic())
+        except InterruptedError as error:
+            if not self._stop.is_set():
+                self.error = str(error)
         except Exception as error:
             self.error = str(error)
         finally:
-            self._process.stdin.close()  # EOF lets the Windows supervisor clean up its native child.
+            self._stop.set()
+            # Controllers cannot write a partial frame while EOF is delivered.
+            with self._send:
+                self._process.stdin.close()
             try:
                 code = self._process.wait(timeout=6)
                 if code:
                     self.error = self.error or f'Windows audio supervisor exited with status {code}; see player.log'
             except subprocess.TimeoutExpired:
                 self.error = 'Windows audio supervisor did not exit after EOF; inspect player.log'
+            self._process.stdout.close()
 
     def stop(self):
         self._stop.set()
