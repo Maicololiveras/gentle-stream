@@ -393,7 +393,12 @@ class StreamApp(App):
     #spectrum { height: 1fr; min-height: 5; margin: 1 0; }
     #state { color: $text-muted; }
     #status { margin-top: 1; }
-    #commands { height: 1; margin: 0 1; overflow-x: auto; overflow-y: hidden; scrollbar-size-horizontal: 0; }
+    #commands { height: 1; margin: 0 1; overflow: hidden; }
+    #commands-left, #commands-right { width: 1fr; height: 1; overflow-x: auto; overflow-y: hidden;
+                                      scrollbar-size-horizontal: 0; }
+    #commands-right { align-horizontal: right; }
+    #transport { width: 15; height: 1; }
+    #transport Button { width: 5; }
     #commands Button { height: 1; min-height: 1; min-width: 5; width: auto; border: none;
                        padding: 0 1; background: $panel; color: $primary; }
     #commands Button:focus { text-style: bold reverse; }
@@ -449,18 +454,20 @@ class StreamApp(App):
             yield Static(id="state")
             yield Static(id="model")
             yield Static("Press / to describe a mood.", id="status")
-        with HorizontalScroll(id="commands"):
-            for id, label, tooltip in (
-                ("play", "⏸", "Play / pause (Space)"), ("next", "⏭", "Next piece (n)"),
-                ("mood-command", "✎", "Describe a mood (/); Enter sends, Esc leaves"),
-                ("model-command", "⚙ default", "Choose mood model (m)"),
-                ("save-command", "💾", "Save audible song (s)"),
-                ("playlist-command", "☷", "Browse playlists (p)"),
-                ("continuous", "↻ off", "Continuous playlist from selection (c)"),
-                ("quieter", "-", "Volume down 5% (-); Down: 1%"),
-                ("louder", "+", "Volume up 5% (+); Up: 1%"),
-            ):
-                yield Button(label, id=id, tooltip=tooltip)
+        with Horizontal(id="commands"):
+            with HorizontalScroll(id="commands-left"):
+                yield Button("💾", id="save-command", tooltip="Save audible song (s)")
+                yield Button("↻ off", id="continuous", tooltip="Continuous playlist from selection (c)")
+                yield Button("✎", id="mood-command", tooltip="Describe a mood (/); Enter sends, Esc leaves")
+                yield Button("☷", id="playlist-command", tooltip="Browse playlists (p)")
+            with Horizontal(id="transport"):
+                yield Button("⏮", id="previous", tooltip="Previous song in playlist (wraps to last)")
+                yield Button("⏸", id="play", tooltip="Play / pause (Space)")
+                yield Button("⏭", id="next", tooltip="Next piece (n); next song when continuous")
+            with HorizontalScroll(id="commands-right"):
+                yield Button("⚙ default", id="model-command", tooltip="Choose mood model (m)")
+                yield Button("-", id="quieter", tooltip="Volume down 5% (-); Down: 1%")
+                yield Button("+", id="louder", tooltip="Volume up 5% (+); Up: 1%")
         yield Input(placeholder="Describe a feeling, a concept, a place… then Enter (Esc to leave)", id="mood")
         yield Footer()
 
@@ -543,6 +550,18 @@ class StreamApp(App):
         if self._control(self.player.next):
             self._status("Next playlist song." if self.player.continuous is True else "Next piece, same mood.")
 
+    def action_previous(self) -> None:
+        if self.player.playlist_index is None:
+            if self._selection is None:
+                self._status("Select a song in Playlist (p) before using Previous.")
+                return
+            styles, index, name = self._selection
+            action = lambda: self.player.previous(styles, start_index=index, name=name)
+        else:
+            action = self.player.previous
+        if self._control(action):
+            self._status("Previous playlist song.")
+
     def action_volume(self, percent: int) -> None:
         """Change the volume by whole percentage points, so repeated steps never drift."""
         self._control(lambda: self.player.set_volume((round(self.player.volume * 100) + percent) / 100))
@@ -573,7 +592,8 @@ class StreamApp(App):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         actions = {"playlist": self.action_pick_preset, "play": self.action_toggle,
-                   "next": self.action_next, "mood-command": self.action_focus_mood,
+                   "next": self.action_next, "previous": self.action_previous,
+                   "mood-command": self.action_focus_mood,
                    "model-command": self.action_pick_model, "save-command": self.action_save_preset,
                    "playlist-command": self.action_pick_preset, "continuous": self.action_continuous,
                    "quieter": lambda: self.action_volume(-5), "louder": lambda: self.action_volume(5)}
@@ -587,8 +607,9 @@ class StreamApp(App):
             if preset is None:
                 return
             self.workers.cancel_group(self, "interpret")  # a late interpretation must not override the choice
-            self._selection = ([p.style for p in picker.songs], picker.selected_index, picker.selection_name)
+            selection = ([p.style for p in picker.songs], picker.selected_index, picker.selection_name)
             if picker.continuous:
+                self._selection = selection
                 self._start_continuous()
                 return
             try:
@@ -596,6 +617,7 @@ class StreamApp(App):
             except (ValueError, PlayerError) as e:
                 self._status(f"[$error]Could not apply style:[/] {escape(str(e))}")
                 return
+            self._selection = selection
             source = "default" if picker.is_default else "saved"
             self._status(f"Up next: [b]{escape(preset.name)}[/b] ({source})")
 
@@ -660,6 +682,7 @@ class StreamApp(App):
         self.call_from_thread(self._interpreted, style, usage)
 
     def _interpreted(self, style: Style, usage: Usage | None) -> None:
+        self._selection = None  # an ordinary mood exits playlist navigation as well as rotation
         cost = f" · {usage.format()}" if usage else ""
         self._status(f"Up next: [b]{escape(style.name)}[/b] · {escape(style.summary())}{cost}")
         if usage:

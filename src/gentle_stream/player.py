@@ -187,8 +187,27 @@ class Player:
     def next(self) -> None:
         """Advance once in continuous mode, otherwise vary the same mood. Render the
         first bar now and crossfade over pending audio, retaining the existing Next smoothing."""
+        self._navigate()
+
+    def previous(self, styles: Sequence[Style] | None = None, start_index: int = 0,
+                 name: str = "") -> None:
+        """Previous playlist song. Optional picker snapshot is prepared only on demand.
+
+        A single synchronized operation prepares/selects/replaces audio; rejected snapshots
+        cannot partially configure a queue. Existing configured playlists take precedence.
+        """
+        self._navigate(previous=True, styles=styles, start_index=start_index, name=name)
+
+    def _navigate(self, previous: bool = False, styles: Sequence[Style] | None = None,
+                  start_index: int = 0, name: str = "") -> None:
         with self._render_lock:  # waits for a bar being rendered, so no old bar can be queued after this
-            if self.continuous:
+            if previous and self.playlist_index is None and styles is not None:
+                prepared = self.engine.prepare_playlist(styles, start_index, name, continuous=False)
+                self.engine._apply_playlist(prepared)
+                self._explicit_index = start_index
+                self._explicit_piece = self.engine.piece + 1
+            navigating = previous or self.continuous
+            if navigating:
                 # Rendering may already have crossed a form boundary. Next is relative to
                 # consumed audio, or the last explicit selection not yet consumed, never
                 # to speculative producer lookahead. Consecutive presses each advance once.
@@ -198,12 +217,15 @@ class Player:
                 if (now.playlist_revision == self.engine.playlist_revision
                         and now.piece >= self._explicit_piece):
                     index = now.playlist_index
-                self.engine.queue_next(from_index=index)
+                if previous:
+                    self.engine.queue_previous(from_index=index)
+                else:
+                    self.engine.queue_next(from_index=index)
             else:
                 self.engine.queue_next()
             audio = self.engine.render_bar()
             meta = self._metadata()
-            if self.continuous:
+            if navigating:
                 self._explicit_index, self._explicit_piece = meta.playlist_index, meta.piece
             fade = min(int(CROSSFADE_SECONDS * self.engine.sr), len(audio))
             ramp = np.linspace(0, 1, fade, dtype=np.float32)[:, None]

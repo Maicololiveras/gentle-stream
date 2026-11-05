@@ -47,10 +47,10 @@ async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
         assert app.query_one("#spectrum").region.height >= 5
         for selector in ("#state", "#model", "#status"):
             assert app.query_one(selector).region.bottom <= panel.content_region.bottom
-        for id, icon in {"play": "⏸", "next": "⏭", "mood-command": "✎",
+        for id, icon in {"previous": "⏮", "play": "⏸", "next": "⏭", "mood-command": "✎",
                          "save-command": "💾", "playlist-command": "☷", "continuous": "↻ off"}.items():
             assert str(app.query_one(f"#{id}", Button).label) == icon
-        for id in ("play", "next", "mood-command", "model-command", "save-command", "playlist-command",
+        for id in ("previous", "play", "next", "mood-command", "model-command", "save-command", "playlist-command",
                    "continuous", "quieter", "louder"):
             button = app.query_one(f"#{id}", Button)
             assert button.can_focus and button.tooltip
@@ -75,6 +75,7 @@ async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
                 await pilot.press("escape")
         p.toggle.assert_called_once()
         p.next.assert_called_once()
+        p.previous.assert_called_once()
         assert p.set_volume.call_count == 2 and p.volume == .8
         p.set_playlist.assert_not_called()
         assert "Select a song" in shown(app, "#status")
@@ -84,6 +85,36 @@ async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
         assert isinstance(app.focused, Button)
         (store.path.parent / f"toolbar-{size[0]}x{size[1]}.svg").write_text(app.export_screenshot())
         shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(60, 20), (80, 24), (120, 30)])
+async def test_centered_transport_and_independent_side_groups(ui, size):
+    app, p, shell, store, _ = ui
+    shell.model = "provider/" + "long-model-" * 20
+    p.playlist_index = None
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        strip = app.query_one("#commands").content_region
+        left = app.query_one("#commands-left")
+        center = app.query_one("#transport")
+        right = app.query_one("#commands-right")
+        assert [b.id for b in left.query(Button)] == ["save-command", "continuous", "mood-command", "playlist-command"]
+        assert [b.id for b in center.query(Button)] == ["previous", "play", "next"]
+        assert [b.id for b in right.query(Button)] == ["model-command", "quieter", "louder"]
+        assert abs((center.region.x * 2 + center.region.width) - (strip.x * 2 + strip.width)) <= 1
+        assert left.region.right <= center.region.x < center.region.right <= right.region.x
+        assert all(center.region.contains_region(b.region) for b in center.query(Button))
+        assert str(app.query_one("#previous", Button).label) == "⏮"
+        assert "previous" in str(app.query_one("#previous").tooltip).lower()
+        assert "long-model" in str(app.query_one("#model-command", Button).label)
+        assert shell.model in str(app.query_one("#model-command").tooltip)
+        await pilot.click("#previous")
+        p.previous.assert_not_called()
+        assert "Select a song in Playlist" in shown(app, "#status")
+        assert app.is_running
+        if size[0] in (80, 120):
+            (store.path.parent / f"centered-{size[0]}.svg").write_text(app.export_screenshot())
 
 
 @pytest.mark.asyncio
@@ -314,4 +345,79 @@ async def test_unwritable_library_keeps_save_and_long_model_is_elided(ui):
         assert "Could not save" in shown(app, "#save-status")
         assert app.screen.query_one("#save-playlist", Input).value == "Night"
         assert library.path.is_dir() and not store.path.exists()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_previous_click_ordinary_picker_real_audio_and_pause(ui, monkeypatch):
+    from gentle_stream.player import Player
+    from tests.test_continuous_playback import SONGS, engine
+    from tests.test_player import FakeStream
+
+    app, _, shell, store, library = ui
+    p = Player(engine(), volume=.37)
+    monkeypatch.setattr(p, "start", lambda: None)  # real queue, explicit fake callback; no device/producer
+    app.player = p
+    for s in SONGS:
+        library.save("Evening", s.name, s)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        await pilot.press("enter")  # ordinary One, no eager unrelated-cache preparation
+        await pilot.pause()
+        assert not p.continuous and p.playlist_index is None
+        await pilot.click("#previous")
+        await pilot.pause()
+        # Displayed alphabetical order is One, Three, Two: previous from One is Two.
+        assert p.style.name == "Two" and p.playlist_index == 2
+        stream = FakeStream(callback=p._callback)
+        stream.pull(128)
+        app._tick()
+        assert "Two" in shown(app, "#title") and "Evening #3" in shown(app, "#state")
+        await pilot.press("escape", "space")
+        stream.pull(1024)  # finish ordinary sounddevice fade
+        held = p.position
+        await pilot.click("#previous")
+        await pilot.wait_for_scheduled_animations()
+        await pilot.click("#previous")
+        await pilot.pause()
+        assert p.style.name == "One" and p.playlist_index == 0
+        assert not p.playing and not p.continuous and p.volume == .37 and p.position == held
+        await pilot.press("escape", "space")
+        stream.pull(128)
+        app._tick()
+        assert p.now.style.name == "One" and "One" in shown(app, "#title")
+        shell.interpret_with_usage.assert_not_called()
+        shell.list_models.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_previous_old_daemon_error_visible_ui_alive(ui):
+    import json
+    from gentle_stream.client import PlayerClient
+    from tests.test_continuous_playback import LocalConnection, engine
+    from gentle_stream.player import Player
+
+    app, _, shell, store, library = ui
+    p = Player(engine())
+    p.set_playlist((DEFAULT,), name="Old")
+    class OldConnection(LocalConnection):
+        def send_bytes(self, raw):
+            if json.loads(raw)["cmd"] == "previous":
+                self.answer = {"ok": False, "error": "bad request: unknown command 'previous'"}
+            else:
+                super().send_bytes(raw)
+    client = PlayerClient(OldConnection(p))
+    client.close = lambda: None  # no socket lifecycle in this in-memory transport
+    app.player = client
+    async with app.run_test() as pilot:
+        before = p.playback_state()
+        await pilot.click("#previous")
+        await pilot.pause()
+        assert "unknown command 'previous'" in shown(app, "#status")
+        assert app.is_running and p.playback_state() == before
+        await pilot.press("escape", "space")
+        assert not p.playing
         shell.interpret_with_usage.assert_not_called()

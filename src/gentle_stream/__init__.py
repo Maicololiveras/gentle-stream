@@ -17,7 +17,10 @@ CONTROLS = """controls:
            click or Enter applies; d deletes only saved songs; Esc closes
   c        continuous playlist from the selected song; toggle off without restarting audio
            picker: c or Repeat from selection starts the full list at the highlighted song
-  clickable command strip above the mood input uses icons for these actions; Tab focuses buttons.
+  command strip: save/repeat/mood/playlists left; previous/play-pause/next centered;
+                 chosen model and volume right. Tab focuses buttons; side groups scroll independently.
+  ⏮ button: previous playlist song (wraps), repeat on or off; preserves pause and volume.
+            Select a song in Playlist first. No new key; this does not restart the current song.
   model button shows the chosen model (or honest Gentle Shell default); hover for full labels.
   + / -    volume up / down by 5%
   ↑ / ↓    volume up / down by 1%

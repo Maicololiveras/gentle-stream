@@ -1,6 +1,6 @@
 # Save and repeat a playlist from your selected song
 
-Use the existing Textual Playlist panel and the rose command strip directly above the mood input. No browser or separate player is needed. All keyboard shortcuts remain available; Tab focuses buttons, and tooltips describe actions and shortcuts. `↻ off` / `↻ on` and play/pause glyphs show state without relying on color. Narrow terminals scroll the command strip horizontally; focusing a button brings it into view. At 24 rows or fewer, tighter panel spacing keeps the spectrum, state, model and status inside the panel. Long status/model lines have full hover tooltips.
+Use the existing Textual Playlist panel and the rose command strip directly above the mood input. No browser or separate player is needed. All keyboard shortcuts remain available; Tab focuses buttons, and tooltips describe actions and shortcuts. `↻ off` / `↻ on` and play/pause glyphs show state without relying on color. The left group is **💾 ↻ off/on ✎ ☷**; the full-strip center is **⏮ ⏸/▶ ⏭**; the right group is **⚙ chosen model − +**. Narrow terminals scroll each side group independently; focusing a side button brings it into view without moving the three transport buttons. At 24 rows or fewer, tighter panel spacing keeps the spectrum, state, model and status inside the panel. Long status/model lines have full hover tooltips.
 
 ## Quick path
 
@@ -21,8 +21,12 @@ Clicking a song or pressing Enter normally applies only that style and exits con
 
 ## Playback and model feedback
 
-The strip mirrors existing play/pause, Next, mood, model, save, playlist, and volume actions, plus continuous playback. The model button shows the selected model, or the honest Gentle Shell default when none is selected; long IDs are elided with their full value in the tooltip. The model line retains session usage.
+**⏮ Previous** returns to the preceding song in the selected playlist's displayed order, wrapping from the first song to the last. It works with continuous playback on or off and preserves pause/play and volume. It never means “restart this composition.” Repeated clicks each move one entry, even while paused or while the producer renders ahead. With no playlist selection it asks you to select a song in **Playlist (p)** first.
 
-Audible playlist/song position is read from `player.now`, not the producer's future index. Continuous playback belongs to the daemon and continues after **b** detaches the UI. No model or speech-generation calls are made to apply saved styles or advance a playlist. **q** still stops playback. An older daemon rejecting continuous commands produces an error instead of an assumed success.
+An ordinary song selection prepares only that song. The first Previous request lazily prepares its remembered full playlist snapshot; a missing voice cache rejects that request without changing playback. Later navigation reuses resident clips. An ordinary newly interpreted mood clears this selection.
+
+The strip also mirrors existing play/pause, Next, mood, model, save, playlist, and volume actions, plus continuous playback. The model button shows the selected model, or the honest Gentle Shell default when none is selected; long IDs are elided with their full value in the tooltip. The model line retains session usage.
+
+Audible playlist/song position is read from `player.now`, not the producer's future index. Continuous playback belongs to the daemon and continues after **b** detaches the UI. No model or speech-generation calls are made to apply saved styles or advance a playlist. **q** still stops playback. An older daemon rejecting continuous or Previous commands produces a visible error instead of an assumed success; the UI stays usable. Previous adds no CLI flag or keyboard shortcut.
 
 See [runtime semantics](continuous-playback.md) and [storage format](named-playlists.md) for API and buffering details.

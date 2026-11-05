@@ -177,9 +177,12 @@ Model extensions stay enabled on purpose: some providers (such as `claude-bridge
 The compact clickable command strip sits between the spectrum panel and mood input.
 Tab focuses its buttons; tooltips show full action labels and shortcuts. The model button
 shows the chosen model (or Gentle Shell default), with long IDs elided safely. On narrow
-terminals, focus/scroll horizontally to reach the remaining commands. Icons include
-**⏸ / ▶** play/pause, **⏭** Next, **✎** mood, **⚙** model, **💾** save,
-**☷** playlists and **↻ off/on** continuous playback.
+terminals, focus/scroll each side group independently. **💾 save, ↻ off/on, ✎ mood, ☷ playlists**
+stay left; **⏮ Previous, ⏸ / ▶ play/pause, ⏭ Next** stay centered in the full strip;
+**⚙ chosen model, − / + volume** stay right. **⏮** returns to the previous playlist song
+in displayed order, wrapping at the first song, with repeat on or off. Pause and volume are
+preserved. Select a song in Playlist first; Previous is not a current-song restart and adds
+no keyboard shortcut. Older-daemon rejections remain visible without closing the UI.
 
 | Key | Action |
 | :--- | :--- |
