@@ -14,6 +14,8 @@ and applied at the next bar boundary.
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -40,6 +42,14 @@ def _ir(space_tenths: int, sr: int) -> np.ndarray:
     return procedural_ir(space_tenths / 10, sr, IR_SEED)
 
 
+@dataclass(frozen=True)
+class _Playlist:
+    songs: tuple[tuple[Style, tuple[np.ndarray, ...]], ...]
+    start_index: int
+    name: str
+    continuous: bool
+
+
 # ---------------------------------------------------------------- engine
 class Engine:
     HEADROOM = 24.0  # seconds of scheduling buffer: longest bar plus the longest note tail
@@ -53,6 +63,11 @@ class Engine:
         renderer = _samples.load_renderer(sf2, sr) if sf2 is not None else None
         self._sampled = _samples.SampleInstruments(renderer, np.random.default_rng(0), sr) if renderer else None
         self._lock = threading.Lock()
+        self._playlist: _Playlist | None = None
+        self.playlist_name: str | None = None
+        self.playlist_index: int | None = None
+        self.playlist_revision = 0
+        self.continuous = False
         self._pending_style: tuple[Style, tuple[np.ndarray, ...]] | None = None
         self._pending_next = False
         self._root_rng = np.random.default_rng(seed)
@@ -86,16 +101,77 @@ class Engine:
                              "with 'agrega frases' again to prepare it.") from e
 
     # ------------------------------------------------------------ control (any thread)
+    @staticmethod
+    def playlist_style(data: dict) -> Style:
+        """Strict playlist boundary, using the existing Style normalizer as the authority."""
+        if not isinstance(data, dict):
+            raise ValueError("playlist style must be an object")
+        style = Style.from_dict(data)
+        canonical = style.to_dict()
+        if any(key not in canonical or value != canonical[key] for key, value in data.items()):
+            raise ValueError("playlist style must contain valid, normalized Style fields")
+        return style
+
+    def prepare_playlist(self, styles: Sequence[Style], start_index: int = 0, name: str = "",
+                         continuous: bool = False) -> _Playlist:
+        """Prepare every cache on the caller; no active state changes on any failure."""
+        if not isinstance(styles, Sequence) or isinstance(styles, (str, bytes)) or not styles:
+            raise ValueError("playlist must contain at least one Style")
+        songs = tuple(styles)
+        if type(start_index) is not int or not 0 <= start_index < len(songs):
+            raise ValueError("playlist start_index must be an integer within the playlist")
+        if not isinstance(name, str):
+            raise ValueError("playlist name must be a string")
+        if type(continuous) is not bool:
+            raise ValueError("continuous must be a boolean")
+        for style in songs:
+            if not isinstance(style, Style) or self.playlist_style(style.to_dict()) != style:
+                raise ValueError("playlist entries must be validated Styles")
+        return _Playlist(tuple((style, self._load_voice(style)) for style in songs),
+                         start_index, name, continuous)
+
+    def _apply_playlist(self, playlist: _Playlist) -> None:
+        with self._lock:
+            self._playlist = playlist
+            self.playlist_name = playlist.name
+            self.playlist_revision += 1
+            self.continuous = playlist.continuous
+            self._select_playlist(playlist.start_index)
+
+    def _select_playlist(self, index: int) -> None:
+        """Caller holds _lock. All routes share the same resident-cache selection."""
+        self.playlist_index = index
+        self._pending_style = self._playlist.songs[index]
+        self._pending_next = False
+
+    def set_playlist(self, styles: Sequence[Style], start_index: int = 0, name: str = "",
+                     continuous: bool = False) -> None:
+        self._apply_playlist(self.prepare_playlist(styles, start_index, name, continuous))
+
+    def set_continuous(self, enabled: bool) -> None:
+        with self._lock:
+            if type(enabled) is not bool:
+                raise ValueError("continuous must be a boolean")
+            if enabled and self._playlist is None:
+                raise ValueError("configure a playlist before enabling continuous playback")
+            self.continuous = enabled
+
     def queue_style(self, style: Style) -> None:
         """Validate/load voice on the caller before queuing; failure leaves playback untouched."""
         clips = self._load_voice(style)
         with self._lock:
+            self._playlist = None
+            self.playlist_name = self.playlist_index = None
+            self.continuous = False
             self._pending_style, self._pending_next = (style, clips), False
 
-    def queue_next(self) -> None:
-        """Start a new piece with the same mood from the next bar on."""
+    def queue_next(self, from_index: int | None = None) -> None:
+        """Advance a continuous playlist once; otherwise retain same-mood variation."""
         with self._lock:
-            if self._pending_style is None:
+            if self.continuous:
+                index = self.playlist_index if from_index is None else from_index
+                self._select_playlist((index + 1) % len(self._playlist.songs))
+            elif self._pending_style is None:
                 self._pending_next = True
 
     @property
@@ -131,8 +207,14 @@ class Engine:
     def render_bar(self) -> np.ndarray:
         """Render the next bar as float32 stereo samples of shape (n, 2)."""
         with self._lock:
-            style, nxt = self._pending_style, self._pending_next
-            self._pending_style, self._pending_next = None, False
+            return self._render_bar()
+
+    def _render_bar(self) -> np.ndarray:
+        if (self.continuous and self._pending_style is None and not self._pending_next
+                and self.bar >= sum(bars for _, bars in FIRST_FORM)):
+            self._select_playlist((self.playlist_index + 1) % len(self._playlist.songs))
+        style, nxt = self._pending_style, self._pending_next
+        self._pending_style, self._pending_next = None, False
         if style is not None:
             self._start_piece(*style)
         elif nxt:

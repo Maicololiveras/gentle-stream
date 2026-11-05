@@ -10,6 +10,8 @@ key kept in a 0600 file. Messages are JSON (never pickle), one request and one r
     {"cmd": "play" | "pause" | "toggle" | "next"}
     {"cmd": "set_volume", "volume": 0.5}
     {"cmd": "set_style", "style": {...Style.to_dict()...}}
+    {"cmd": "set_playlist", "styles": [...], "start_index": 0, "name": "", "continuous": false}
+    {"cmd": "set_continuous", "enabled": false}
     {"cmd": "stop"}                  -> {"ok": true}, then the process exits and every connection sees EOF
     anything else                    -> {"ok": false, "error": "..."}
 
@@ -113,7 +115,7 @@ def _stream_factory():
 
 
 def state(player, bands: int = 0) -> dict:
-    now = player.now
+    playback = player.playback_state()
     out = {
         "pid": os.getpid(),
         "playing": bool(player.playing) and not bool(getattr(player, 'audio_output_error', None)),
@@ -123,8 +125,7 @@ def state(player, bands: int = 0) -> dict:
         "underruns": int(player.underruns),
         "output_underflows": None if player.output_underflows is None else int(player.output_underflows),
         "buffered_seconds": float(player.buffered_seconds),
-        "now": {"style": now.style.to_dict(), "piece": now.piece, "bar": now.bar},
-        "style": player.style.to_dict(),
+        **playback,
     }
     out['audio_output'] = getattr(player, 'audio_output', 'sounddevice')
     if out['audio_output'] == 'windows':
@@ -150,6 +151,18 @@ def handle(player, request) -> dict:
             if not isinstance(request["style"], dict):
                 raise TypeError("style must be an object")
             player.set_style(Style.from_dict(request["style"]))
+        elif cmd == "set_playlist":
+            from .engine import Engine
+
+            styles = request["styles"]
+            if not isinstance(styles, list):
+                raise ValueError("playlist styles must be a list")
+            player.set_playlist(tuple(Engine.playlist_style(style) for style in styles),
+                                start_index=request.get("start_index", 0),
+                                name=request.get("name", ""),
+                                continuous=request.get("continuous", False))
+        elif cmd == "set_continuous":
+            player.set_continuous(request["enabled"])
         elif cmd == "stop":
             return {"ok": True}
         else:

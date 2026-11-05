@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from multiprocessing.connection import AuthenticationError, Client
 
 import numpy as np
@@ -162,7 +163,11 @@ class PlayerClient:
         self.underruns = state.get("underruns")
         self.output_underflows = state.get("output_underflows")
         self.buffered_seconds = state.get("buffered_seconds")
-        self.now = NowPlaying(Style.from_dict(now["style"]), now["piece"], now["bar"])
+        self.continuous = state.get("continuous", False)
+        self.playlist_name = state.get("playlist_name")
+        self.playlist_index = state.get("playlist_index")
+        self.now = NowPlaying(Style.from_dict(now["style"]), now["piece"], now["bar"],
+                              now.get("playlist_name"), now.get("playlist_index"))
         self.style = Style.from_dict(state["style"])   # rendered, maybe not audible yet: the base for a mood
 
     def _control(self, cmd: str, **args) -> None:
@@ -202,6 +207,19 @@ class PlayerClient:
 
     def set_style(self, style: Style) -> None:
         self._control("set_style", style=style.to_dict())
+
+    def set_playlist(self, styles: Sequence[Style], start_index: int = 0, name: str = "",
+                     continuous: bool = False) -> None:
+        """Queue a validated snapshot; the daemon prepares all saved voice caches atomically."""
+        if not isinstance(styles, Sequence) or isinstance(styles, (str, bytes)):
+            raise ValueError("playlist must be a sequence of validated Styles")
+        if any(not isinstance(style, Style) for style in styles):
+            raise ValueError("playlist entries must be validated Styles")
+        self._control("set_playlist", styles=[style.to_dict() for style in styles],
+                      start_index=start_index, name=name, continuous=continuous)
+
+    def set_continuous(self, enabled: bool) -> None:
+        self._control("set_continuous", enabled=enabled)
 
     def detach(self) -> None:
         """Hang up and leave the music playing."""
