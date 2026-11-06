@@ -166,9 +166,11 @@ async def test_plus_and_minus_change_the_volume_in_steps_of_5():
         await pilot.press("minus")
         assert player.volume == pytest.approx(0.75)
         await pilot.pause(0.1)
-        assert "vol 75%" in text(app, "#state")
+        assert "75%" in text(app, "#volume-meter")
+        assert "vol " not in text(app, "#state")
         await pilot.press("plus", "plus")
         assert player.volume == pytest.approx(0.85)
+        assert "85%" in text(app, "#volume-meter")
 
 
 @pytest.mark.asyncio
@@ -178,9 +180,11 @@ async def test_up_and_down_change_the_volume_in_steps_of_1():
         await pilot.press("down")
         assert player.volume == pytest.approx(0.79)
         await pilot.pause(0.1)
-        assert "vol 79%" in text(app, "#state")
+        assert "79%" in text(app, "#volume-meter")
+        assert "vol " not in text(app, "#state")
         await pilot.press("up", "up")
         assert player.volume == pytest.approx(0.81)
+        assert "81%" in text(app, "#volume-meter")
 
 
 @pytest.mark.asyncio
@@ -190,11 +194,14 @@ async def test_volume_steps_stop_at_0_and_100_percent():
         player.set_volume(0.03)
         await pilot.press("minus")
         assert player.volume == 0.0
+        assert "0%" in text(app, "#volume-meter")
         player.set_volume(0.98)
         await pilot.press("plus")
         assert player.volume == 1.0
+        assert "100%" in text(app, "#volume-meter")
         await pilot.press("down")
         assert player.volume == pytest.approx(0.99)
+        assert "99%" in text(app, "#volume-meter")
 
 
 @pytest.mark.asyncio
@@ -538,14 +545,15 @@ async def test_the_footer_shows_back_and_quit():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("size, min_rows", [((160, 45), 20), ((80, 24), 5)])
+@pytest.mark.parametrize("size, min_rows", [((160, 45), 18), ((80, 24), 5)])
 async def test_the_spectrum_fills_the_free_height_and_the_info_sits_by_the_input(size, min_rows):
     app, _ = make_app(FakeShell())
     async with app.run_test(size=size) as pilot:
         await pilot.pause(0.3)
         spectrum = app.query_one("#spectrum")
         assert spectrum.region.height >= min_rows
+        assert app.query_one("#commands").region.height == (8 if size[1] > 24 else 2)
         assert len(str(spectrum.render()).split("\n")) == spectrum.region.height
         status, mood = app.query_one("#status"), app.query_one("#mood")
         gap = mood.region.y - (status.region.y + status.region.height)
-        assert 0 <= gap <= 3                      # no empty band between the info and the input
+        assert 0 <= gap - app.query_one("#commands").region.height <= 3  # toolbar occupies the gap

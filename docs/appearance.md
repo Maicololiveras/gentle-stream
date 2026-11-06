@@ -43,10 +43,13 @@ change musical parameters. Submitting the separate mood input still interprets a
 At wide terminal widths, each configured band occupies additional columns rather than leaving the rest of the graph blank. Segmented bars retain their one-cell spacing. These are spectrum **visualizations**, not DSP equalizer controls. Fonts, glyph
 availability and terminal transparency are terminal-owned; no unsupported font or
 terminal-transparent theme is offered. Custom colors can reduce contrast: choose a
-readable accent/background pair or use Defaults. The original flat black toolbar,
-bold-only focused buttons, centered transport and independent scrolling side groups
-are preserved; the paused Play glyph alone uses blue for visibility without
-changing its button background or position. Hiding the graph shrinks the panel rather than reserving empty graph
+readable accent/background pair or use Defaults. The flat black toolbar expands vertically for the five-bar volume indicator but keeps
+bold-only focused buttons, horizontally centered transport and independently scrolling
+side groups. The paused Play glyph alone uses blue without changing its button
+background or position. Track details and mood share one upper metadata row with
+full hover tooltips, leaving room for the expanded strip while the model, playback
+state and status remain separate. At 24 rows or fewer the gauge compresses to two
+rows; the percentage remains below the bars. Hiding the graph shrinks the panel rather than reserving empty graph
 space. **/** temporarily reveals and focuses a hidden mood input without changing its
 saved visibility; applying preferences again restores the configured visibility.
 

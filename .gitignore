@@ -11,6 +11,7 @@
 # Local ODD notes quote private paths from the user's requests; never publish them.
 /odd/tasks/customizable-appearance.md
 /odd/tasks/upstream-contribution.md
+/odd/tasks/volume-gauge.md
 /odd/tasks/named-playlists-controls.md
 /odd/tasks/menu-polish.md
 # Local artboard alternatives are not part of the runtime contribution.

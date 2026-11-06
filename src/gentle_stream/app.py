@@ -26,6 +26,7 @@ from textual.worker import get_current_worker
 from .appearance import Preferences, PreferenceStore
 from .appearance_ui import SettingsScreen
 from .visualizer import Spectrum
+from .volume_meter import render_compact_volume_meter, render_volume_meter
 from .bridge import GentleShell, InterpretError, Usage
 from .client import PlayerError
 from .player import Player
@@ -391,16 +392,19 @@ class StreamApp(App):
     #title { text-style: bold; color: $primary; width: 1fr; }
     #playlist { height: 1; min-height: 1; width: 12; border: none; background: $panel; color: $primary; }
     #playlist:focus { text-style: bold reverse; }
+    #metadata { height: 1; }
+    #details, #mood-line { width: 1fr; }
     #details, #model { color: $text-muted; }
     #mood-line { color: $accent; text-style: italic; }
     #spectrum { height: 1fr; min-height: 5; margin: 1 0; }
     #state { color: $text-muted; }
     #status { margin-top: 1; }
-    #commands { height: 1; margin: 0 1; overflow: hidden; background: #000000; }
-    #commands-left, #commands-right { width: 1fr; height: 1; overflow-x: auto; overflow-y: hidden;
-                                      scrollbar-size-horizontal: 0; }
+    #commands { height: 8; margin: 0 1; overflow: hidden; background: #000000; }
+    #commands-left, #commands-right { width: 1fr; height: 1fr; overflow-x: auto; overflow-y: hidden;
+                                      scrollbar-size-horizontal: 0; align-vertical: bottom; }
     #commands-right { align-horizontal: right; }
-    #transport { width: 15; height: 1; }
+    #transport { width: 15; height: 1fr; align-vertical: bottom; }
+    #volume-meter { width: 19; min-width: 19; height: 8; background: #000000; overflow: hidden; }
     #transport Button { width: 5; }
     #commands Button { height: 1; min-height: 1; min-width: 5; width: auto; border: none;
                        padding: 0 1; background: #000000; color: $primary; }
@@ -409,6 +413,8 @@ class StreamApp(App):
     #commands #model-command { min-width: 26; }
     #commands #continuous { min-width: 7; }
     Screen.compact #panel { padding: 0 1; margin-top: 0; }
+    Screen.compact #commands, Screen.compact #volume-meter { height: 2; }
+    Screen.compact #volume-meter { width: 9; min-width: 9; }
     Screen.compact #spectrum { margin: 0; }
     Screen.compact #details, Screen.compact #mood-line, Screen.compact #state,
     Screen.compact #model, Screen.compact #status { height: 1; }
@@ -456,8 +462,9 @@ class StreamApp(App):
             with Horizontal(id="title-row"):
                 yield Static(id="title")
                 yield Button("Playlist", id="playlist")
-            yield Static(id="details")
-            yield Static(id="mood-line")
+            with Horizontal(id="metadata"):
+                yield Static(id="details")
+                yield Static(id="mood-line")
             yield Spectrum(self.player, id="spectrum")
             yield Static(id="state")
             yield Static(id="model")
@@ -473,9 +480,10 @@ class StreamApp(App):
                 yield Button("⏸", id="play", tooltip="Play / pause (Space)")
                 yield Button("⏭", id="next", tooltip="Next piece (n); next song when continuous")
             with HorizontalScroll(id="commands-right"):
-                yield Button("⚙  default", id="model-command", tooltip="Settings (F2) · direct model picker (m)")
                 yield Button("-", id="quieter", tooltip="Volume down 5% (-); Down: 1%")
+                yield Static(id="volume-meter")
                 yield Button("+", id="louder", tooltip="Volume up 5% (+); Up: 1%")
+                yield Button("⚙  default", id="model-command", tooltip="Settings (F2) · direct model picker (m)")
         yield Input(placeholder="Describe a feeling, a concept, a place… then Enter (Esc to leave)", id="mood")
         yield Footer()
 
@@ -483,7 +491,7 @@ class StreamApp(App):
         # keep references: the timer also fires while a modal is on top or the app is shutting down,
         # when queries would search another screen
         self._w = {name: self.query_one(f"#{name}") for name in ("title", "details", "mood-line", "spectrum",
-                                                                 "state", "model", "status")}
+                                                                 "state", "model", "status", "volume-meter")}
         self._buttons = {b.id: b for b in self.query("#commands Button")}
         # Textual ignores mouse and Enter presses while a button's active-effect
         # class persists; transport commands must accept consecutive presses.
@@ -494,6 +502,7 @@ class StreamApp(App):
         self._footer = self.query_one(Footer)
         self._commands = self.query_one('#commands')
         self._panel = self.query_one('#panel')
+        self._metadata = self.query_one('#metadata')
         self.apply_preferences(self.preferences)
         self.player.start()
         self._show_model()
@@ -522,12 +531,18 @@ class StreamApp(App):
             return
         now, p = self.player.now, self.player
         w["title"].update(Text(f"♪ {now.style.name}"))
-        w["details"].update(Text(now.style.summary()))
-        w["mood-line"].update(Text(f"“{now.style.mood}”" if now.style.mood else ""))
+        details = Text(now.style.summary())
+        mood = Text(f"“{now.style.mood}”" if now.style.mood else "")
+        w["details"].update(details)
+        w["details"].tooltip = details
+        w["mood-line"].update(mood)
+        w["mood-line"].tooltip = mood
         state = "[b $success]▶ Playing[/]" if p.playing else "[b $warning]⏸ Paused[/]"
         audible_name, audible_index = getattr(now, "playlist_name", None), getattr(now, "playlist_index", None)
         audible = f" · {escape(audible_name)} #{audible_index + 1}" if isinstance(audible_name, str) and isinstance(audible_index, int) else ""
-        w["state"].update(f"{state} · piece {now.piece} · bar {now.bar + 1} · vol {round(p.volume * 100)}%{audible}")
+        w["state"].update(f"{state} · piece {now.piece} · bar {now.bar + 1}{audible}")
+        meter = render_compact_volume_meter if self._root.has_class("compact") else render_volume_meter
+        w["volume-meter"].update(meter(round(p.volume * 100), self.preferences.accent))
         self._buttons["play"].label = "⏸" if p.playing else "▶"
         self._buttons["play"].set_class(not p.playing, "paused")
         gap = ' ' * self.preferences.icon_gap
@@ -571,6 +586,7 @@ class StreamApp(App):
         # Keep the user-selected accent exact; Textual's theme-derived $primary may
         # differ by one channel after its internal palette conversion.
         self._w['title'].styles.color = p.accent
+        self._metadata.display = p.show_details
         for name in ('details', 'mood-line'):
             self._w[name].display = p.show_details
         self._w['model'].display = p.show_model

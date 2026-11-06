@@ -159,6 +159,58 @@ async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(60, 20), (80, 24), (200, 46)])
+async def test_volume_meter_lives_between_controls_without_moving_transport(ui, size):
+    app, player, shell, store, library = ui
+    player.volume = 0
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        strip = app.query_one("#commands")
+        center = app.query_one("#transport")
+        right = app.query_one("#commands-right")
+        meter = app.query_one("#volume-meter")
+        assert strip.styles.background.hex == "#000000"
+        assert strip.region.height >= (8 if size[1] > 24 else 2)
+        assert strip.region.contains_region(center.region)
+        assert abs((center.region.x * 2 + center.region.width) -
+                   (strip.region.x * 2 + strip.region.width)) <= 1
+        assert [child.id for child in right.children] == ["quieter", "volume-meter", "louder", "model-command"]
+        assert meter.region.width >= (19 if size[1] > 24 else 9)
+        assert strip.region.contains_region(meter.region)
+        assert "0%" in meter.render().plain and "█" not in meter.render().plain
+        at_zero = meter.render().plain
+        state = shown(app, "#state")
+        assert "Playing" in state and "piece 1" in state and "bar 1" in state
+        assert "Audible #2" in state and "vol " not in state
+        assert "Gentle Shell default" in shown(app, "#model")
+        for selector in ("#details", "#mood-line"):
+            assert str(app.query_one(selector).tooltip) == shown(app, selector)
+        assert app.query_one("#spectrum").region.height >= 5
+        for selector in ("#state", "#model", "#status"):
+            assert app.query_one(selector).region.bottom <= app.query_one("#panel").content_region.bottom
+        louder = app.query_one("#louder", Button)
+        louder.scroll_visible(animate=False, immediate=True)
+        await pilot.pause()
+        assert await pilot.click("#louder")
+        await pilot.pause()
+        assert player.volume == .05 and "5%" in meter.render().plain
+        assert meter.render().plain != at_zero
+        if size[1] > 24:
+            assert meter.render().plain.count("█") == 1
+        await pilot.press("plus", "minus", "down", "up")
+        await pilot.pause()
+        assert player.volume == .05 and "5%" in meter.render().plain
+        if size[1] > 24:
+            assert meter.render().plain.count("█") == 1
+        assert player.set_volume.call_count == 5
+        player.toggle.assert_not_called()
+        player.next.assert_not_called()
+        player.previous.assert_not_called()
+        shell.interpret_with_usage.assert_not_called()
+        assert not store.path.exists() and not library.path.exists()
+
+
+@pytest.mark.asyncio
 async def test_wide_window_keeps_transport_visible_and_fills_spectrum(ui):
     app, player, shell, _, _ = ui
     player.spectrum.side_effect = lambda count: np.ones(count)
@@ -190,7 +242,7 @@ async def test_centered_transport_and_independent_side_groups(ui, size):
         right = app.query_one("#commands-right")
         assert [b.id for b in left.query(Button)] == ["save-command", "continuous", "mood-command", "playlist-command"]
         assert [b.id for b in center.query(Button)] == ["previous", "play", "next"]
-        assert [b.id for b in right.query(Button)] == ["model-command", "quieter", "louder"]
+        assert [b.id for b in right.query(Button)] == ["quieter", "louder", "model-command"]
         assert abs((center.region.x * 2 + center.region.width) - (strip.x * 2 + strip.width)) <= 1
         assert left.region.right <= center.region.x < center.region.right <= right.region.x
         assert all(center.region.contains_region(b.region) for b in center.query(Button))
