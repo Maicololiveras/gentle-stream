@@ -295,8 +295,13 @@ class PresetPicker(ModalScreen[Preset | None]):
             self.songs = self.store.list() if self.group is None else self.library.list_songs(self.group)
             error = self.store.error if self.group is None else self.library.error
         if not self.at_groups:
-            options.add_options([Option(Text(f"{p.name} — {p.mood or p.style.summary()}"), id=f"song-{i}")
-                                 for i, p in enumerate(self.songs)])
+            rows = []
+            for i, song in enumerate(self.songs):
+                prompt = Text(f"🌸  {song.name} — {song.mood or song.style.summary()}")
+                if i + 1 < len(self.songs):
+                    prompt.append("\n ")  # Keep a blank display row even when a description wraps.
+                rows.append(Option(prompt, id=f"song-{i}"))
+            options.add_options(rows)
         if options.option_count:
             options.highlighted = 0
         self.query_one("#presets-breadcrumb", Static).update(

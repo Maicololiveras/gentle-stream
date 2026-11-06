@@ -32,7 +32,7 @@ change musical parameters. Submitting the separate mood input still interprets a
 | Custom background | exactly `#RRGGBB`; used by gentle theme | `#140a12` |
 | Accent | exactly `#RRGGBB` | `#ff76c3` |
 | Minimum bar height | 5–30 terminal rows; grows into available panel space | 5 |
-| Bands | 8–128; capped by available columns | 48 |
+| Bands | 8–128 source bands; repeated across wider terminal columns | 48 |
 | Refresh | 5–30 Hz | 15 |
 | Smoothing | 0–1, retained fraction of previous visual frame | 0 |
 | Peak hold | 0–3 seconds; zero disables | 0 |
@@ -40,7 +40,7 @@ change musical parameters. Submitting the separate mood input still interprets a
 | Visibility | independent visualizer, controls, mood input, footer, track details, model line | all shown |
 | Compact | tighter panel spacing (also automatic at 24 rows or fewer) | off |
 
-These are spectrum **visualizations**, not DSP equalizer controls. Fonts, glyph
+At wide terminal widths, each configured band occupies additional columns rather than leaving the rest of the graph blank. Segmented bars retain their one-cell spacing. These are spectrum **visualizations**, not DSP equalizer controls. Fonts, glyph
 availability and terminal transparency are terminal-owned; no unsupported font or
 terminal-transparent theme is offered. Custom colors can reduce contrast: choose a
 readable accent/background pair or use Defaults. The original flat black toolbar,

@@ -18,7 +18,7 @@ Playlist opens with a separate title, description, My/Default tabs, breadcrumb a
    playlist, Enter selects it, and Enter again saves. An existing selection
    focuses **Save** so the final Enter does not reopen the picker. **New playlist…**
    reveals and focuses its name field; Enter there saves. Clicking **Save** works too.
-2. Open **Playlist** (**p** or **☷**). Under **My playlist**, open **Saved prompts** or a named group. Songs appear in the same panel. **< My playlists** / Backspace returns to groups; Left/Right switches the My/Default tabs.
+2. Open **Playlist** (**p** or **☷**). Under **My playlist**, open **Saved prompts** or a named group. Songs appear in the same panel with a `🌸` marker on the left and one blank display row between entries, even when descriptions wrap. The marker and gap never become part of saved song names or selectable options. **< My playlists** / Backspace returns to groups; Left/Right switches the My/Default tabs.
 3. Highlight a song, then choose **Repeat from selection** or press **c**. Playback begins at that song, advances after each complete composition, and wraps in alphabetical display order. **Default playlist** works the same way but cannot be edited.
 4. Click **↻ on** or press **c** outside the input to turn rotation off. Current audio is not cut or restarted. Already-buffered transitions may still be heard.
 

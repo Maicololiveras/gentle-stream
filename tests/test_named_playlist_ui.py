@@ -159,6 +159,24 @@ async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
 
 
 @pytest.mark.asyncio
+async def test_wide_window_keeps_transport_visible_and_fills_spectrum(ui):
+    app, player, shell, _, _ = ui
+    player.spectrum.side_effect = lambda count: np.ones(count)
+    async with app.run_test(size=(200, 46)) as pilot:
+        await pilot.pause()
+        strip = app.query_one("#commands")
+        center = app.query_one("#transport")
+        spectrum = app.query_one("#spectrum")
+        assert 0 <= strip.region.y < strip.region.bottom <= app.screen.size.height
+        assert center.region.width == 15 and strip.region.contains_region(center.region)
+        assert abs((center.region.x * 2 + center.region.width) - (strip.region.x * 2 + strip.region.width)) <= 1
+        assert spectrum.region.width > 100
+        assert all(len(line) == spectrum.region.width for line in spectrum.render().plain.splitlines())
+        assert not app.query_one("#mood").region.y >= app.screen.size.height
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("size", [(60, 20), (80, 24), (120, 30)])
 async def test_centered_transport_and_independent_side_groups(ui, size):
     app, p, shell, store, _ = ui
@@ -417,6 +435,85 @@ async def test_default_continuous_starts_highlighted_and_is_read_only(ui):
         styles = sorted(default_playlist(), key=lambda s: s.name.casefold())
         p.set_playlist.assert_called_once_with(styles, start_index=1, name="Default playlist", continuous=True)
         p.play.assert_called_once()
+        assert not store.path.exists() and not library.path.exists()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_flower_marks_existing_and_new_songs_in_all_playlist_views(ui):
+    app, player, shell, store, library = ui
+    store.save("Legacy", DEFAULT)
+    library.save("Test Group", "Before", DEFAULT)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("p", "enter")
+        await pilot.pause()
+        options = app.screen.query_one("#presets", OptionList)
+        assert str(options.get_option_at_index(0).prompt).startswith("🌸  Legacy")
+        await pilot.press("backspace", "down", "enter")
+        await pilot.pause()
+        assert str(options.get_option_at_index(0).prompt).startswith("🌸  Before")
+        await pilot.press("escape")
+        await pilot.pause()  # Wait for the first modal to dismiss before reopening it.
+        library.save("Test Group", "After", Style(bpm=90))
+        stored = (store.path.read_bytes(), library.path.read_bytes())
+        await pilot.press("p", "down", "enter")
+        await pilot.pause()
+        options = app.screen.query_one("#presets", OptionList)  # New modal, not the dismissed one.
+        assert options.option_count == 2
+        assert all(str(options.get_option_at_index(i).prompt).startswith("🌸  ") for i in range(2))
+        assert [song.name for song in library.list_songs("Test Group")] == ["After", "Before"]
+        await pilot.press("right")
+        await pilot.pause()
+        assert options.option_count > 2
+        assert all(str(options.get_option_at_index(i).prompt).startswith("🌸  ")
+                   for i in range(options.option_count))
+        assert (store.path.read_bytes(), library.path.read_bytes()) == stored
+        player.set_style.assert_not_called()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_wrapped_named_songs_leave_a_blank_row_between_options(ui):
+    app, player, shell, store, library = ui
+    mood = "Synthetic energetic rhythm with warm keys and many descriptive words that wrap on a narrow list"
+    library.save("Test Group", "First", Style(mood=mood))
+    library.save("Test Group", "Second", Style(mood=mood))
+    stored = library.path.read_bytes()
+    async with app.run_test(size=(80, 30)) as pilot:
+        await pilot.press("p", "down", "enter")
+        await pilot.pause()
+        options = app.screen.query_one("#presets", OptionList)
+        rows = [options.render_line(y).text for y in range(options.size.height)]
+        first = next(i for i, row in enumerate(rows) if "First" in row)
+        second = next(i for i, row in enumerate(rows) if "Second" in row)
+        assert second > first + 2  # description spans multiple rows before the next song
+        assert any(not row.strip() for row in rows[first + 1:second]), "No visible blank row between songs"
+        assert options.option_count == 2
+        await pilot.press("down", "enter")
+        player.set_style.assert_called_once_with(library.list_songs("Test Group")[1].style)
+        assert library.path.read_bytes() == stored and not store.path.exists()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_default_playlist_songs_have_one_visual_gap_without_changing_selection(ui):
+    app, player, shell, store, library = ui
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("p", "right")
+        await pilot.pause()
+        options = app.screen.query_one("#presets", OptionList)
+        from gentle_stream.playlists import default_playlist
+        styles = sorted(default_playlist(), key=lambda style: style.name.casefold())
+        assert options.option_count == len(styles)
+        lines = [options.render_line(y).text for y in range(options.size.height)]
+        blank_rows = [line for line in lines if not line.strip()]
+        assert blank_rows, "The visible song list has no blank row between adjacent options"
+        assert all(options.get_option_at_index(index).id == f"song-{index}"
+                   for index in range(options.option_count))
+        await pilot.press("down")
+        assert options.highlighted == 1
+        await pilot.press("enter")
+        player.set_style.assert_called_once_with(styles[1])
         assert not store.path.exists() and not library.path.exists()
         shell.interpret_with_usage.assert_not_called()
 
