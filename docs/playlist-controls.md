@@ -1,6 +1,12 @@
 # Save and repeat a playlist from your selected song
 
-Use the existing Textual Playlist panel and the rose command strip directly above the mood input. No browser or separate player is needed. All keyboard shortcuts remain available; Tab focuses buttons, and tooltips describe actions and shortcuts. `↻ off` / `↻ on` and play/pause glyphs show state without relying on color. The left group is **💾 ↻ off/on ✎ ☷**; the full-strip center is **⏮ ⏸/▶ ⏭**; the right group is **⚙ chosen model − +**. Narrow terminals scroll each side group independently; focusing a side button brings it into view without moving the three transport buttons. At 24 rows or fewer, tighter panel spacing keeps the spectrum, state, model and status inside the panel. Long status/model lines have full hover tooltips.
+Use the existing Textual Playlist panel and the flat black command strip directly above the mood input. No browser or separate player is needed. All keyboard shortcuts remain available; Tab focuses buttons, and tooltips describe actions and shortcuts. `↻  off` / `↻  on` and play/pause glyphs show state without relying on color. The left group is **💾 ↻  off/on ✎ ☷**; the full-strip center is **⏮ ⏸/▶ ⏭**; the right group is **⚙ chosen model − +**. Narrow terminals scroll each side group independently; focusing a side button brings it into view without moving the three transport buttons. At 24 rows or fewer, tighter panel spacing keeps the spectrum, state, model and status inside the panel. Long status/model lines have full hover tooltips.
+
+The gear now opens **Settings**, including appearance and explicit **Choose mood
+model…** access; **m** still opens the model picker directly. **F2** always recovers
+Settings when controls, input or footer are hidden. Icon-label gaps default to two
+cells (configurable from one to three); toolbar backgrounds remain flat black.
+See [Appearance settings](appearance.md) for preview/save/cancel, visibility and colors.
 
 ## Quick path
 

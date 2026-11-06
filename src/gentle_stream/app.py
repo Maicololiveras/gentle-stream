@@ -23,6 +23,9 @@ from textual.widgets import Button, Footer, Header, Input, OptionList, Select, S
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
+from .appearance import Preferences, PreferenceStore
+from .appearance_ui import SettingsScreen
+from .visualizer import Spectrum
 from .bridge import GentleShell, InterpretError, Usage
 from .client import PlayerError
 from .player import Player
@@ -32,7 +35,6 @@ from .presets import NAME_MAX, Preset, PresetError, PresetStore, normalize_name
 from .style import Style
 
 DEFAULT_MODEL_LABEL = "Gentle Shell default"
-BLOCKS = " ▁▂▃▄▅▆▇█"
 
 # gentlemanprogramming.com palette
 GENTLEMAN_THEME = Theme(
@@ -68,33 +70,8 @@ GENTLEMAN_THEME = Theme(
         "scrollbar-background": "#1a1218",
     },
 )
-# spectrum rows, top to bottom: rose peaks over a muted base
-SPECTRUM_COLORS = ("#ff76c3", "#f095c8", "#ffb1dd", "#a78e9b", "#76616b")
-
-
 def model_label(model: str | None) -> str:
     return model or DEFAULT_MODEL_LABEL
-
-
-class Spectrum(Static):
-    """Block-character bars filling the widget, one column per log-spaced band, shaded from rose (top) to muted."""
-
-    MIN_ROWS = 5
-
-    def __init__(self, player: Player, **kw):
-        super().__init__(**kw)
-        self.player = player
-
-    def tick(self) -> None:
-        width = max(8, self.size.width or 48)
-        rows_n = max(self.MIN_ROWS, self.size.height or self.MIN_ROWS)
-        levels = self.player.spectrum(width) * rows_n * 8
-        rows = []
-        for i, r in enumerate(range(rows_n - 1, -1, -1)):    # i = 0 is the top row
-            color = SPECTRUM_COLORS[min(len(SPECTRUM_COLORS) - 1, i * len(SPECTRUM_COLORS) // rows_n)]
-            cell = (levels - r * 8).clip(0, 8).astype(int)
-            rows.append(Text("".join(BLOCKS[c] for c in cell), style=color))
-        self.update(Text("\n").join(rows))
 
 
 class ModelPicker(ModalScreen[str | None]):
@@ -393,15 +370,15 @@ class StreamApp(App):
     #spectrum { height: 1fr; min-height: 5; margin: 1 0; }
     #state { color: $text-muted; }
     #status { margin-top: 1; }
-    #commands { height: 1; margin: 0 1; overflow: hidden; }
+    #commands { height: 1; margin: 0 1; overflow: hidden; background: #000000; }
     #commands-left, #commands-right { width: 1fr; height: 1; overflow-x: auto; overflow-y: hidden;
                                       scrollbar-size-horizontal: 0; }
     #commands-right { align-horizontal: right; }
     #transport { width: 15; height: 1; }
     #transport Button { width: 5; }
     #commands Button { height: 1; min-height: 1; min-width: 5; width: auto; border: none;
-                       padding: 0 1; background: $panel; color: $primary; }
-    #commands Button:focus { text-style: bold reverse; }
+                       padding: 0 1; background: #000000; color: $primary; }
+    #commands Button:focus { text-style: bold; color: $foreground; }
     #commands #model-command { min-width: 26; }
     #commands #continuous { min-width: 7; }
     Screen.compact #panel { padding: 0 1; margin-top: 0; }
@@ -413,6 +390,7 @@ class StreamApp(App):
     #mood:focus { border: round $primary; }
     """
     BINDINGS = [
+        Binding("f2", "settings", "Settings", priority=True),
         Binding("space", "toggle", "Play/Pause"),
         Binding("n", "next", "Next"),
         Binding("slash", "focus_mood", "Mood"),
@@ -430,11 +408,14 @@ class StreamApp(App):
     ]
 
     def __init__(self, player: Player, shell: GentleShell, initial_mood: str | None = None,
-                 presets: PresetStore | None = None):
+                 presets: PresetStore | None = None, preference_store: PreferenceStore | None = None):
         super().__init__()
         self.player, self.shell, self.initial_mood = player, shell, initial_mood
         self.presets = presets if presets is not None else PresetStore()
         self.library = PlaylistLibrary()
+        self.preference_store = preference_store if preference_store is not None else PreferenceStore()
+        self.preferences = self.preference_store.load()
+        self._ui_timer = None
         self._selection: tuple[list[Style], int, str] | None = None
         self._buttons: dict[str, Button] = {}
         self.session_usage: Usage | None = None  # tokens and cost of every successful interpretation so far
@@ -465,7 +446,7 @@ class StreamApp(App):
                 yield Button("⏸", id="play", tooltip="Play / pause (Space)")
                 yield Button("⏭", id="next", tooltip="Next piece (n); next song when continuous")
             with HorizontalScroll(id="commands-right"):
-                yield Button("⚙ default", id="model-command", tooltip="Choose mood model (m)")
+                yield Button("⚙  default", id="model-command", tooltip="Settings (F2) · direct model picker (m)")
                 yield Button("-", id="quieter", tooltip="Volume down 5% (-); Down: 1%")
                 yield Button("+", id="louder", tooltip="Volume up 5% (+); Up: 1%")
         yield Input(placeholder="Describe a feeling, a concept, a place… then Enter (Esc to leave)", id="mood")
@@ -477,17 +458,25 @@ class StreamApp(App):
         self._w = {name: self.query_one(f"#{name}") for name in ("title", "details", "mood-line", "spectrum",
                                                                  "state", "model", "status")}
         self._buttons = {b.id: b for b in self.query("#commands Button")}
-        self.screen.set_class(self.size.height <= 24, "compact")
+        # Textual ignores mouse and Enter presses while a button's active-effect
+        # class persists; transport commands must accept consecutive presses.
+        for name in ("previous", "play", "next"):
+            self._buttons[name].active_effect_duration = 0
+        self._root = self.screen
+        self._mood_input = self.query_one('#mood', Input)
+        self._footer = self.query_one(Footer)
+        self._commands = self.query_one('#commands')
+        self._panel = self.query_one('#panel')
+        self.apply_preferences(self.preferences)
         self.player.start()
         self._show_model()
         self._tick()
-        self.set_interval(1 / 15, self._tick)
         if self.initial_mood:
             self._request(self.initial_mood)
 
     def on_resize(self, event: events.Resize) -> None:
         if self.screen_stack:
-            self.screen_stack[0].set_class(event.size.height <= 24, "compact")
+            self.screen_stack[0].set_class(self.preferences.compact or event.size.height <= 24, "compact")
 
     def on_unmount(self) -> None:
         self.shell.cancel()  # a running gentle-shell would otherwise keep the process alive after quit
@@ -513,7 +502,8 @@ class StreamApp(App):
         audible = f" · {escape(audible_name)} #{audible_index + 1}" if isinstance(audible_name, str) and isinstance(audible_index, int) else ""
         w["state"].update(f"{state} · piece {now.piece} · bar {now.bar + 1} · vol {round(p.volume * 100)}%{audible}")
         self._buttons["play"].label = "⏸" if p.playing else "▶"
-        self._buttons["continuous"].label = "↻ on" if p.continuous is True else "↻ off"
+        gap = ' ' * self.preferences.icon_gap
+        self._buttons["continuous"].label = f"↻{gap}{'on' if p.continuous is True else 'off'}"
 
     def _show_model(self) -> None:
         session = f" · session: {self.session_usage.format()}" if self.session_usage else ""
@@ -521,12 +511,62 @@ class StreamApp(App):
         self._w["model"].tooltip = Text(f"model: {model_label(self.shell.model)}{session}")
         label = self.shell.model or "default"
         short = label if len(label) <= 22 else label[:10] + "…" + label[-11:]
-        self._buttons["model-command"].label = Text(f"⚙ {short}")
-        self._buttons["model-command"].tooltip = Text(f"Choose mood model (m) · {model_label(self.shell.model)}")
+        self._buttons["model-command"].label = Text(f"⚙{' ' * self.preferences.icon_gap}{short}")
+        self._buttons["model-command"].tooltip = Text(f"Settings (F2) · direct model picker (m) · {model_label(self.shell.model)}")
 
     def _status(self, text: str) -> None:
         self._w["status"].update(text)
         self._w["status"].tooltip = self._w["status"].render()
+
+    def apply_preferences(self, preferences: Preferences, *, persist: bool = False) -> None:
+        """The single UI-only apply path. Validate/save before changing any widget or timer."""
+        preferences.validate()
+        if persist:
+            self.preference_store.save(preferences)
+        self.preferences = preferences
+        if not hasattr(self, '_root'):
+            return
+        p = preferences
+        background = {'black': '#000000', 'charcoal': '#202020'}.get(p.theme, p.background)
+        # Textual 8.2.8 doesn't invalidate CSS when the assigned theme name is unchanged.
+        # Alternate two registered names, bounding the registry while forcing live refresh.
+        theme_name = 'appearance-b' if self.theme == 'appearance-a' else 'appearance-a'
+        theme = Theme(name=theme_name, primary=p.accent, secondary='#f095c8', accent=p.accent,
+                      foreground='#f6eff3', background=background, surface=background,
+                      panel='#342230', success='#b4e7c7', warning='#f2b86d', error='#ff718f', dark=True)
+        if p == Preferences():
+            self.theme = GENTLEMAN_THEME.name
+        else:
+            self.register_theme(theme)
+            self.theme = theme.name
+        self._root.set_class(p.compact or self.size.height <= 24, 'compact')
+        # Keep the user-selected accent exact; Textual's theme-derived $primary may
+        # differ by one channel after its internal palette conversion.
+        self._w['title'].styles.color = p.accent
+        for name in ('details', 'mood-line'):
+            self._w[name].display = p.show_details
+        self._w['model'].display = p.show_model
+        spectrum = self._w['spectrum']
+        spectrum.configure(p)
+        spectrum.styles.min_height = p.height
+        spectrum.display = p.show_visualizer
+        self._panel.styles.height = '1fr' if p.show_visualizer else 'auto'
+        self._commands.display = p.show_controls
+        self._mood_input.display = p.show_input
+        self._footer.display = p.show_footer
+        if self._ui_timer is not None:
+            self._ui_timer.stop()
+        self._ui_timer = self.set_interval(1 / p.refresh_hz, self._tick)
+        self._show_model()
+
+    def action_settings(self) -> None:
+        if not isinstance(self.screen, SettingsScreen):
+            self.push_screen(SettingsScreen(self))
+
+    def get_system_commands(self, screen):
+        from textual.app import SystemCommand
+        yield from super().get_system_commands(screen)
+        yield SystemCommand('Settings', 'Appearance and mood model (F2)', self.action_settings)
 
     # ------------------------------------------------------------ actions
     def action_back(self) -> None:
@@ -567,7 +607,8 @@ class StreamApp(App):
         self._control(lambda: self.player.set_volume((round(self.player.volume * 100) + percent) / 100))
 
     def action_focus_mood(self) -> None:
-        self.query_one("#mood", Input).focus()
+        self._mood_input.display = True
+        self._mood_input.focus()
 
     def action_leave_mood(self) -> None:
         self.set_focus(None)
@@ -594,7 +635,7 @@ class StreamApp(App):
         actions = {"playlist": self.action_pick_preset, "play": self.action_toggle,
                    "next": self.action_next, "previous": self.action_previous,
                    "mood-command": self.action_focus_mood,
-                   "model-command": self.action_pick_model, "save-command": self.action_save_preset,
+                   "model-command": self.action_settings, "save-command": self.action_save_preset,
                    "playlist-command": self.action_pick_preset, "continuous": self.action_continuous,
                    "quieter": lambda: self.action_volume(-5), "louder": lambda: self.action_volume(5)}
         if action := actions.get(event.button.id):

@@ -7,6 +7,7 @@ import pytest
 from textual.widgets import Button, Input, OptionList, Select
 
 from gentle_stream.app import ModelPicker, PresetPicker, SaveDialog, StreamApp
+from gentle_stream.appearance_ui import SettingsScreen
 from gentle_stream.client import PlayerError
 from gentle_stream.playlist_library import PlaylistLibrary
 from gentle_stream.presets import PresetStore
@@ -38,6 +39,71 @@ def shown(app, selector):
 
 
 @pytest.mark.asyncio
+async def test_pause_resume_focus_does_not_invert_button_background(ui):
+    app, player, shell, _, _ = ui
+    async with app.run_test(size=(80, 24)) as pilot:
+        button = app.query_one("#play", Button)
+        assert await pilot.click("#play")
+        await pilot.hover("#spectrum")
+        await pilot.pause(button.active_effect_duration + .05)
+        await pilot.wait_for_scheduled_animations()
+        assert app.focused is button and button.can_focus
+        assert player.playing is False and str(button.label) == "▶"
+        assert not button.styles.text_style.reverse
+        assert not button.styles.text_style.underline
+        assert button.styles.text_style.bold
+        assert button.styles.border_left[0] in ("", "none")
+        assert button.styles.border_right[0] in ("", "none")
+        await pilot.press("enter")
+        await pilot.pause(button.active_effect_duration + .05)
+        await pilot.wait_for_scheduled_animations()
+        assert player.playing is True and str(button.label) == "⏸"
+        assert app.focused is button
+        assert not button.styles.text_style.reverse
+        assert not button.styles.text_style.underline
+        assert button.styles.border_left[0] in ("", "none")
+        assert button.styles.border_right[0] in ("", "none")
+        assert player.toggle.call_count == 2
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_transport_double_clicks_are_not_debounced(ui):
+    app, player, shell, store, library = ui
+    async with app.run_test(size=(80, 24)) as pilot:
+        assert await pilot.click("#play", times=2)
+        await pilot.pause()
+        assert player.toggle.call_count == 2 and player.playing is True
+        assert str(app.query_one("#play", Button).label) == "⏸"
+        assert await pilot.click("#next", times=2)
+        await pilot.pause()
+        assert player.next.call_count == 2
+        assert await pilot.click("#previous", times=2)
+        await pilot.pause()
+        assert player.previous.call_count == 2
+        assert not store.path.exists() and not library.path.exists()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_toolbar_background_is_black_with_and_without_keyboard_focus(ui):
+    app, player, shell, _, _ = ui
+    async with app.run_test(size=(80, 24)) as pilot:
+        for button in app.query("#commands Button"):
+            assert button.styles.background.hex == "#000000", button.id
+            button.focus()
+            await pilot.pause()
+            assert app.focused is button
+            assert button.styles.background.hex == "#000000", button.id
+            assert not button.styles.text_style.reverse
+            assert not button.styles.text_style.underline
+            assert button.styles.border_left[0] in ("", "none")
+            assert button.styles.border_right[0] in ("", "none")
+        player.toggle.assert_not_called()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("size", [(60, 20), (80, 24)])
 async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
     app, p, shell, store, _ = ui
@@ -48,7 +114,7 @@ async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
         for selector in ("#state", "#model", "#status"):
             assert app.query_one(selector).region.bottom <= panel.content_region.bottom
         for id, icon in {"previous": "⏮", "play": "⏸", "next": "⏭", "mood-command": "✎",
-                         "save-command": "💾", "playlist-command": "☷", "continuous": "↻ off"}.items():
+                         "save-command": "💾", "playlist-command": "☷", "continuous": "↻  off"}.items():
             assert str(app.query_one(f"#{id}", Button).label) == icon
         for id in ("previous", "play", "next", "mood-command", "model-command", "save-command", "playlist-command",
                    "continuous", "quieter", "louder"):
@@ -60,8 +126,13 @@ async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
             assert await pilot.click(f"#{id}", offset=(button.size.width // 2, 0)), id
             await pilot.pause()
             if id == "model-command":
+                assert isinstance(app.screen, SettingsScreen)
+                await app.screen.submit('model')
                 assert isinstance(app.screen, ModelPicker)
+                await pilot.pause()
                 await pilot.press("down", "enter")
+                await pilot.pause()
+                await pilot.press("escape")
                 await pilot.pause()
                 assert "chosen-model" in str(app.query_one("#model-command", Button).label)
                 model_button = app.query_one("#model-command", Button)
@@ -331,7 +402,7 @@ async def test_unwritable_library_keeps_save_and_long_model_is_elided(ui):
     library.path.mkdir()
     async with app.run_test(size=(60, 20)) as pilot:
         label = str(app.query_one("#model-command", Button).label)
-        assert len(label) <= 25 and "…" in label
+        assert len(label) <= 26 and "…" in label
         assert shell.model in str(app.query_one("#model-command").tooltip)
         await pilot.press("s")
         await pilot.pause()
@@ -379,9 +450,7 @@ async def test_previous_click_ordinary_picker_real_audio_and_pause(ui, monkeypat
         await pilot.press("escape", "space")
         stream.pull(1024)  # finish ordinary sounddevice fade
         held = p.position
-        await pilot.click("#previous")
-        await pilot.wait_for_scheduled_animations()
-        await pilot.click("#previous")
+        assert await pilot.click("#previous", times=2)
         await pilot.pause()
         assert p.style.name == "One" and p.playlist_index == 0
         assert not p.playing and not p.continuous and p.volume == .37 and p.position == held
