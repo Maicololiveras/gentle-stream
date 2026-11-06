@@ -26,6 +26,6 @@ Use `p` to open playlists, `s` to save the audible style, `/` to enter a mood, `
 ## Install and verify
 
 1. Follow the [README quick start](../README.md#get-started) for Linux/macOS or [WSL setup](windows-wsl.md) for the Windows-hosted path. PortAudio is needed for native audio; a Gentle Shell provider is needed only when interpreting a new mood.
-2. Start the player without `--mood` to hear the default procedural composition without a model call.
+2. Start the player without `--mood` to hear the default generative composition without a model call. Synthesis is procedural by default; an installed FluidSynth soundfont can enable sampled instruments.
 3. Try `p`, `/`, `s` and `F2`. Saved styles are parameters, not WAV/MP3 files.
 4. Before contributing, run `uv run pytest` in an isolated development environment; [CI coverage](ci.md) explains its platform checks and performance-test exclusion.
