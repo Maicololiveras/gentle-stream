@@ -74,9 +74,14 @@ python3 scripts/forge-voice-windows 'Sigue tu camino' 44100
 ```
 
 Its stdout is raw float32 stereo PCM, not text or a playback command. It uses
-Windows Python in this project's `.voice-venv` with `edge-tts==7.3.1` and the
-existing Windows FFmpeg8.1 at the local paths in that script. The isolated
-environment was explicitly authorized; shared Python and Forge remain unchanged.
+Windows Python in this project's `.voice-venv` with `edge-tts==7.3.1` and a
+Windows `ffmpeg.exe`. The decoder path is chosen **on each device**: the explicit
+`GENTLE_STREAM_WINDOWS_FFMPEG` absolute WSL path, a sibling `ffmpeg.exe` next to
+an explicitly configured `GENTLE_STREAM_WINDOWS_FFPLAY`, or the first
+`ffmpeg.exe` found by normal interop PATH precedence. A missing or non-executable
+file fails before synthesis. No user path, WinGet package, FFmpeg version or
+global profile path is embedded. The isolated environment leaves shared Python
+and Forge unchanged.
 From Windows, the local prerequisite can be prepared with Python 3.12:
 
 ```powershell

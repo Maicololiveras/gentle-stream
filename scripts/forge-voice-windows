@@ -5,14 +5,14 @@ Usage: python3 scripts/forge-voice-windows 'Sigue tu camino' 44100
 stdout is raw little-endian float32 stereo PCM; diagnostics go to stderr.
 """
 import argparse
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
 # Project-isolated Edge TTS 7.3.1; never use or upgrade Forge's shared Python.
 PYTHON = str(Path(__file__).resolve().parents[1] / ".voice-venv" / "Scripts" / "python.exe")
-FFMPEG = ("/mnt/c/Users/maicolj/AppData/Local/Microsoft/WinGet/Packages/"
-          "Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1-full_build/bin/ffmpeg.exe")
 VOICE = "es-CO-GonzaloNeural"
 RATE = "-10%"
 # Constant program; all listener content is passed as argv, never interpolated code.
@@ -30,18 +30,40 @@ asyncio.run(main())
 '''
 
 
+def windows_ffmpeg() -> str:
+    """Select this device's decoder without a hardcoded user or package version."""
+    configured = os.environ.get("GENTLE_STREAM_WINDOWS_FFMPEG")
+    ffplay = os.environ.get("GENTLE_STREAM_WINDOWS_FFPLAY")
+    if configured:
+        decoder = Path(configured)
+    elif ffplay:
+        player = Path(ffplay)
+        if not player.is_absolute() or player.name.lower() != "ffplay.exe":
+            raise RuntimeError("GENTLE_STREAM_WINDOWS_FFPLAY must be an absolute ffplay.exe path")
+        decoder = player.with_name("ffmpeg.exe")
+    else:
+        found = shutil.which("ffmpeg.exe")
+        decoder = Path(found) if found else None
+    if decoder is None or not decoder.is_absolute() or decoder.name.lower() != "ffmpeg.exe":
+        raise RuntimeError("Windows ffmpeg.exe unavailable; set GENTLE_STREAM_WINDOWS_FFMPEG")
+    if not decoder.is_file() or not os.access(decoder, os.X_OK):
+        raise RuntimeError("Windows ffmpeg.exe unavailable or not executable; set GENTLE_STREAM_WINDOWS_FFMPEG")
+    return str(decoder)
+
+
 def render(text, sr):
     if (type(sr) is not int or not 8000 <= sr <= 96000 or not isinstance(text, str)
             or len(text) > 160 or not 2 <= len(text.split()) <= 12
             or any(ord(c) < 32 or ord(c) == 127 for c in text)):
         raise RuntimeError("invalid voice phrase or sample rate")
+    ffmpeg = windows_ffmpeg()  # validate before a potentially billable network synthesis
     try:
         mp3 = subprocess.run([PYTHON, "-B", "-c", TTS, text, VOICE, RATE],
                              stdin=subprocess.DEVNULL, capture_output=True, timeout=25, check=True).stdout
         if not mp3 or len(mp3) > 2000000:
             raise RuntimeError("invalid voice audio")
         # Decode slightly past the bound so the caller rejects >8s, not silently truncates.
-        pcm = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
+        pcm = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
                               "-i", "pipe:0", "-t", "8.001", "-f", "f32le", "-acodec", "pcm_f32le",
                               "-ac", "2", "-ar", str(sr), "pipe:1"],
                              input=mp3, capture_output=True, timeout=25, check=True).stdout

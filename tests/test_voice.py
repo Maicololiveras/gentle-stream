@@ -146,27 +146,105 @@ class VoiceTests(unittest.TestCase):
         adapter = Path(__file__).resolve().parents[1] / "scripts" / "forge-voice-windows"
         ns = runpy.run_path(str(adapter))
         text = 'hola "mundo"; $(nada) & café'
+        decoder = Path(self.temp.name) / "ffmpeg.exe"
+        decoder.write_bytes(b"fake decoder; never executed")
+        decoder.chmod(0o755)
         results = [subprocess.CompletedProcess([], 0, b"mp3", b""),
                    subprocess.CompletedProcess([], 0, self.pcm.tobytes(), b"")]
-        with patch("subprocess.run", side_effect=results) as run:
-            raw = ns["render"](text, 44100)
-        self.assertEqual(raw, self.pcm.tobytes())
-        synth, decode = run.call_args_list
-        self.assertEqual(voice.VOICE, "es-CO-GonzaloNeural")
-        self.assertEqual(voice.RATE, "-10%")
-        self.assertEqual(synth.args[0][-3:], [text, voice.VOICE, voice.RATE])
-        self.assertEqual(synth.args[0][0], str(adapter.parents[1] / ".voice-venv" / "Scripts" / "python.exe"))
-        self.assertNotIn("shell", synth.kwargs)
-        self.assertEqual(decode.kwargs["input"], b"mp3")
-        self.assertIn("pipe:0", decode.args[0])
-        self.assertIn("pipe:1", decode.args[0])
-        self.assertIn("f32le", decode.args[0])
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("fake", 25)):
-            with self.assertRaises(RuntimeError):
-                ns["render"](text, 44100)
-        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "fake", stderr=b"private")):
-            with self.assertRaises(RuntimeError):
-                ns["render"](text, 44100)
+        with patch.dict(os.environ, {"GENTLE_STREAM_WINDOWS_FFMPEG": str(decoder)}):
+            with patch("subprocess.run", side_effect=results) as run:
+                raw = ns["render"](text, 44100)
+            self.assertEqual(raw, self.pcm.tobytes())
+            synth, decode = run.call_args_list
+            self.assertEqual(voice.VOICE, "es-CO-GonzaloNeural")
+            self.assertEqual(voice.RATE, "-10%")
+            self.assertEqual(synth.args[0][-3:], [text, voice.VOICE, voice.RATE])
+            self.assertEqual(synth.args[0][0], str(adapter.parents[1] / ".voice-venv" / "Scripts" / "python.exe"))
+            self.assertNotIn("shell", synth.kwargs)
+            self.assertEqual(decode.kwargs["input"], b"mp3")
+            self.assertIn("pipe:0", decode.args[0])
+            self.assertIn("pipe:1", decode.args[0])
+            self.assertIn("f32le", decode.args[0])
+            with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("fake", 25)):
+                with self.assertRaises(RuntimeError):
+                    ns["render"](text, 44100)
+            with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "fake", stderr=b"private")):
+                with self.assertRaises(RuntimeError):
+                    ns["render"](text, 44100)
+
+    def test_adapter_uses_this_devices_decoder_next_to_configured_ffplay(self):
+        adapter = Path(__file__).resolve().parents[1] / "scripts" / "forge-voice-windows"
+        tool_dir = Path(self.temp.name) / "Fake Windows Tool With Spaces"
+        tool_dir.mkdir()
+        ffplay = tool_dir / "ffplay.exe"
+        ffmpeg = tool_dir / "ffmpeg.exe"
+        ffplay.write_bytes(b"fake player; not run")
+        ffmpeg.write_bytes(b"fake decoder; not run")
+        ffmpeg.chmod(0o755)
+        results = [subprocess.CompletedProcess([], 0, b"mp3", b""),
+                   subprocess.CompletedProcess([], 0, self.pcm.tobytes(), b"")]
+        with patch.dict(os.environ, {"GENTLE_STREAM_WINDOWS_FFPLAY": str(ffplay),
+                                     "GENTLE_STREAM_WINDOWS_FFMPEG": ""}), \
+             patch("subprocess.run", side_effect=results) as run:
+            pcm = runpy.run_path(str(adapter))["render"]("Sigue tu camino", 44100)
+        self.assertEqual(pcm, self.pcm.tobytes())
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[1].args[0][0], str(ffmpeg))
+        self.assertEqual(run.call_args_list[1].kwargs["input"], b"mp3")
+
+    def test_adapter_discovers_decoder_on_this_devices_path(self):
+        adapter = Path(__file__).resolve().parents[1] / "scripts" / "forge-voice-windows"
+        tool_dir = Path(self.temp.name) / "Fake Windows Tool With Spaces"
+        tool_dir.mkdir()
+        decoder = tool_dir / "ffmpeg.exe"
+        decoder.write_bytes(b"fake decoder; never executed")
+        decoder.chmod(0o755)
+        results = [subprocess.CompletedProcess([], 0, b"mp3", b""),
+                   subprocess.CompletedProcess([], 0, self.pcm.tobytes(), b"")]
+        with patch.dict(os.environ, {"GENTLE_STREAM_WINDOWS_FFMPEG": "",
+                                     "GENTLE_STREAM_WINDOWS_FFPLAY": "",
+                                     "PATH": str(tool_dir)}), \
+             patch("subprocess.run", side_effect=results) as run:
+            pcm = runpy.run_path(str(adapter))["render"]("Sigue tu camino", 44100)
+        self.assertEqual(pcm, self.pcm.tobytes())
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[1].args[0][0], str(decoder))
+
+    def test_adapter_rejects_missing_decoder_before_synthesis(self):
+        adapter = Path(__file__).resolve().parents[1] / "scripts" / "forge-voice-windows"
+        missing = Path(self.temp.name) / "missing" / "ffmpeg.exe"
+        with patch.dict(os.environ, {"GENTLE_STREAM_WINDOWS_FFMPEG": str(missing),
+                                     "GENTLE_STREAM_WINDOWS_FFPLAY": ""}), \
+             patch("subprocess.run") as run:
+            with self.assertRaisesRegex(RuntimeError, "Windows ffmpeg.exe unavailable"):
+                runpy.run_path(str(adapter))["render"]("Sigue tu camino", 44100)
+            run.assert_not_called()
+        self.assertEqual(list(Path(self.temp.name).rglob("*.f32")), [])
+
+    def test_nonexecutable_decoder_is_rejected_before_network_synthesis(self):
+        adapter = Path(__file__).resolve().parents[1] / "scripts" / "forge-voice-windows"
+        tool_dir = Path(self.temp.name) / "Fake Windows Tool With Spaces"
+        tool_dir.mkdir()
+        decoder = tool_dir / "ffmpeg.exe"
+        decoder.write_bytes(b"not executable; never run")
+        decoder.chmod(0o600)
+        ffplay = tool_dir / "ffplay.exe"
+        ffplay.write_bytes(b"fake player; never run")
+        expected = ("forge-voice-windows: Windows ffmpeg.exe unavailable or not executable; "
+                    "set GENTLE_STREAM_WINDOWS_FFMPEG\n")
+        for config in ({"GENTLE_STREAM_WINDOWS_FFMPEG": str(decoder),
+                        "GENTLE_STREAM_WINDOWS_FFPLAY": ""},
+                       {"GENTLE_STREAM_WINDOWS_FFMPEG": "",
+                        "GENTLE_STREAM_WINDOWS_FFPLAY": str(ffplay)}):
+            with self.subTest(config=config):
+                stdout, stderr = io.BytesIO(), io.StringIO()
+                with patch.dict(os.environ, config), \
+                     patch("subprocess.run") as run, \
+                     patch("sys.stdout", SimpleNamespace(buffer=stdout)), patch("sys.stderr", stderr):
+                    code = runpy.run_path(str(adapter))["main"](["Sigue tu camino"])
+                self.assertEqual((code, stdout.getvalue(), stderr.getvalue()), (1, b"", expected))
+                run.assert_not_called()
+        self.assertEqual(list(Path(self.temp.name).rglob("*.f32")), [])
 
     def test_adapter_main_emits_pcm_only_or_clean_error(self):
         adapter = Path(__file__).resolve().parents[1] / "scripts" / "forge-voice-windows"
