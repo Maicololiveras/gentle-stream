@@ -1,24 +1,35 @@
-# Use Windows Gentle Shell from Ubuntu
+# Run gentle-stream in WSL with Windows Gentle Shell
 
-This local adapter connects the Ubuntu gentle-stream installation to maicolj's
-existing Windows Gentle Shell, using its Windows configuration. No Linux Gentle
-Shell installation or credential copying is needed.
+Install Ubuntu in WSL and follow the [README prerequisites](../README.md#get-started):
+Python 3.13 via `uv`, Linux `libportaudio2`, an audio output and a Windows Gentle
+Shell bundle if you want mood interpretation through Windows. No Linux Gentle
+Shell installation or credential copying is needed for that optional adapter.
 
-## Launch from Windows
+## Connect the Windows Gentle Shell already installed on your device
 
-```powershell
-wsl -d Ubuntu -u maicolj -- /home/maicolj/.local/share/gentle-stream/venv/bin/gentle-stream --gentle-shell /mnt/d/Dev/Personal/gentle-stream/scripts/gentle-shell-windows
+From **your Ubuntu shell**, in a clone of this repository:
+
+```bash
+sudo apt-get update && sudo apt-get install -y libportaudio2
+uv sync --locked
+uv run gentle-stream --gentle-shell "$(pwd)/scripts/gentle-shell-windows"
 ```
 
-The adapter must be executable in WSL. If the checkout does not preserve its
-executable bit, run once:
+If your clone is on a Windows drive and the checkout did not retain execute
+permission, run `chmod +x scripts/gentle-shell-windows` first. The adapter reads
+the Windows profile of the **current device** and looks only for that profile's
+`.gentle-shell-bundle/current`, the named version's Gentle Shell entry point and
+one unambiguous bundled `runtime/node-*/node.exe`. It does not scan arbitrary
+profiles or copy credentials. If discovery fails or multiple Node runtimes match,
+it reports an error instead of guessing. Use a separate explicit bundle setting
+only for a nonstandard trusted installation (see Adapter details).
 
-```powershell
-wsl -d Ubuntu -u maicolj -- chmod +x /mnt/d/Dev/Personal/gentle-stream/scripts/gentle-shell-windows
-```
-
-Mood requests use the Windows installation's configured model/provider and can
-incur normal model usage. Launching without a mood does not request a model.
+To start from a Windows terminal, open your chosen WSL distribution and run the
+same Ubuntu commands there; substitute its distro/account names in your own
+shortcut if you create one. This repository does not install or edit a global
+Windows launcher. Mood requests use the Windows installation's configured
+provider and can incur normal model usage. Starting without a mood makes no
+model request.
 
 ## Optional native Windows audio
 
@@ -27,15 +38,20 @@ select `windows` when starting a **new** player. The music still generates live;
 FFplay receives the same stereo PCM, including any requested integrated voice.
 No prerecorded track, model call or speech tool is used by the output backend.
 
-From Ubuntu (replace the executable paths with your own installed paths):
+From Ubuntu, when **starting a new player** (replace the two executable paths
+with the paths installed on that device):
 
 ```bash
-gentle-stream ctl stop
 GENTLE_STREAM_AUDIO_OUTPUT=windows \
 GENTLE_STREAM_WINDOWS_PYTHON='/mnt/c/path/to/python.exe' \
 GENTLE_STREAM_WINDOWS_FFPLAY='/mnt/c/path/to/ffplay.exe' \
-gentle-stream --gentle-shell /mnt/d/Dev/Personal/gentle-stream/scripts/gentle-shell-windows
+uv run gentle-stream --gentle-shell "$(pwd)/scripts/gentle-shell-windows"
 ```
+
+Do not stop an existing player just to change a UI preference or to try this
+optional output. Switching an already-running player's audio backend requires a
+separately planned normal shutdown and restart; an attempted conflicting attach
+returns an error rather than replacing the session.
 
 Both executables must be **Windows** programs, not Linux Python/FFplay. No packages
 are installed automatically. Native Python uses only its standard library; a
@@ -85,14 +101,23 @@ real-time stability; verify long playback and pause/resume on your own device.
 ## Adapter details
 
 - Requires WSL Windows executable interop and Python 3 on Ubuntu's PATH.
-- Reads only the version pointer `C:\Users\maicolj\.gentle-shell-bundle\current`.
-- Executes bundled `runtime/node-24.21.0/node.exe` with the selected version's
-  `node_modules/gentle-pi/bin/gentle-shell.mjs` as a Windows path.
+- Discovers the active Windows user's profile through the current WSL interop
+  session (`cmd.exe /u /d /c` with a constant environment query), converts it
+  with `wslpath`, and reads only its `.gentle-shell-bundle/current` version pointer.
+  For a nonstandard trusted bundle location, set
+  `GENTLE_STREAM_WINDOWS_SHELL_BUNDLE` to its **absolute WSL path**; it must still
+  contain the same pointer, versioned entry point and bundled runtime.
+- Selects exactly one existing `runtime/node-*/node.exe` inside that bundle; a
+  missing or ambiguous executable is rejected. The bundled executable receives
+  the selected version's `node_modules/gentle-pi/bin/gentle-shell.mjs` as a
+  Windows path, converted by WSL without string interpolation.
 - Forwards all arguments (including `--`), standard streams, and exit status
-  directly. Does not invoke `cmd`, `eval`, or the npm shell shim.
+  directly. `cmd.exe` is used only for the constant local profile query, never
+  to interpolate arguments or run a mood. No `eval` or npm shell shim is used.
 - Does not read or copy credentials, edit profiles, or replace global launchers.
-- The home and Node version are local-machine-specific; if the runtime changes,
-  update this adapter rather than installing another Gentle Shell in Linux.
+- No Windows username, drive letter or Node version is compiled into the adapter.
+  These paths are resolved separately on each device. This only supports Windows
+  Gentle Shell bundles with the documented `current`/`runtime` layout.
 
 **Cancellation limitation:** killing the Linux process/process group does not
 guarantee that Windows descendant processes stop. A cancelled or timed-out mood
@@ -103,11 +128,11 @@ request may continue running on Windows; cancellation is not a billing guarantee
 From Ubuntu, list models through the adapter:
 
 ```bash
-/mnt/d/Dev/Personal/gentle-stream/scripts/gentle-shell-windows -- --no-mcp --no-skill-registry --list-models
+./scripts/gentle-shell-windows -- --no-mcp --no-skill-registry --list-models
 ```
 
 The isolated stdlib test uses a fake Node, not the Windows installation:
 
 ```bash
-/home/maicolj/.local/share/gentle-stream/venv/bin/python -B -m unittest discover -s /mnt/d/Dev/Personal/gentle-stream/tests -p test_windows_shell_adapter.py
+uv run pytest tests/test_windows_shell_adapter.py -q
 ```
