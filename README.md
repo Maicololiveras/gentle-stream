@@ -3,6 +3,8 @@
 
 <div align="center">
 
+<img src="docs/assets/launcher-icon.png" width="112" height="112" alt="gentle-stream launcher icon: rose spectrum bars on a dark background" />
+
 <h1>gentle-stream</h1>
 
 <p><strong>Endless generative music in your terminal, steered by how you feel.</strong></p>
@@ -30,6 +32,10 @@ pick, and gentle-stream composes and synthesizes the rest live, bar by bar.
 </p>
 
 <img width="100%" src="docs/assets/tui.svg" alt="The gentle-stream TUI playing a lo-fi piece called Café Rain for the mood 'rainy night in a small café': title, key, tempo and progression, a rose-coloured spectrum, playback state, the chosen model with the session's token usage, the mood input and the key bindings in the footer." />
+
+<a href="docs/assets/demo.mp4"><img width="85%" src="docs/assets/demo-poster.jpg" alt="Watch the captioned gentle-stream demo: terminal playback, playlist browsing and saving a generative electrohouse style" /></a>
+<p><a href="docs/assets/demo.mp4"><strong>▶ Watch the playlist and mood demo (2 min 35 s, Spanish captions and music)</strong></a></p>
+<p>Original synthesized electrohouse soundtrack; no sampled recordings or voiceover. The captured session demonstrates playlists and moods; for the newer visual settings, see <a href="docs/appearance.md">Appearance</a>. <a href="docs/demo.md">Read the transcript and walkthrough</a>.</p>
 
 </div>
 
@@ -108,6 +114,8 @@ Only describing a mood calls a model. The status line shows what that call used,
 | An audio output device | Playback goes through PortAudio (`sounddevice`); on Linux install your distro's PortAudio package (for example `libportaudio2`) |
 | FluidSynth *(optional)* | Only for sampled instruments: `brew install fluid-synth` or your system's `fluidsynth` package |
 
+**Audio libraries:** On Ubuntu/Debian, install `libportaudio2` with your package manager; on macOS, install `portaudio` with Homebrew. These are platform libraries, not Python packages. Windows users should run the supported app inside WSL rather than invoke the Unix-only daemon with native Windows Python. See [Windows/WSL setup](docs/windows-wsl.md) for the optional native Windows output path and its separate FFplay/Python requirements.
+
 **Install as a command**
 
 ```bash
@@ -123,7 +131,7 @@ cd gentle-stream
 uv run gentle-stream
 ```
 
-It starts playing right away. Press `/`, describe a mood, press `Enter`.
+It starts playing right away. Press `/`, describe a mood, press `Enter`. Press `p` for saved or built-in playlists, `s` to save the audible style and `c` to repeat a playlist from the selected song. Press `F2` to change appearance and open model selection without restarting music; `m` still opens model selection directly. See [Playlist controls](docs/playlist-controls.md) and [Appearance](docs/appearance.md).
 
 **WSL optional Windows output:** select `GENTLE_STREAM_AUDIO_OUTPUT=windows` when
 starting a new player to stream live mixed PCM to native Windows FFplay instead
@@ -134,7 +142,7 @@ Windows Python/FFplay paths, unchanged controls, and unavailable device metrics.
 ```bash
 gentle-stream --mood "rainy night in a small café"        # interpret a mood on start
 gentle-stream --model claude-bridge/claude-haiku-5-5      # choose the model up front
-gentle-stream setup-samples                               # optional: sampled instruments (~120 MB, once)
+gentle-stream setup-samples                               # optional: install FluidSynth first, then add sampled instruments
 gentle-stream --help                                      # every flag and key
 ```
 
@@ -174,6 +182,11 @@ Model extensions stay enabled on purpose: some providers (such as `claude-bridge
 
 ## Controls
 
+**F2** or the **gear** opens [Appearance settings](docs/appearance.md): live spectrum
+styles, colors, layout and visibility, plus explicit model selection. Preview/Cancel
+is temporary; Save persists independently of songs. F2 always works, even when the
+controls and footer are hidden. The command palette also includes Settings.
+
 The compact clickable command strip sits between the spectrum panel and mood input.
 Tab focuses its buttons; tooltips show full action labels and shortcuts. The model button
 shows the chosen model (or Gentle Shell default), with long IDs elided safely. On narrow
@@ -189,7 +202,8 @@ no keyboard shortcut. Older-daemon rejections remain visible without closing the
 | `space` | Play / pause; sounddevice fades smoothly, while Windows cuts the owned output to discard buffered audio (a hard cut may click) |
 | `n` | Next piece with the same mood, or next song when continuous playback is on |
 | `/` | Describe a mood; `Enter` sends it, `Esc` leaves the input |
-| `m` | Choose the model Gentle Shell uses (listed from `gentle-shell -- --list-models`); `Enter` picks, `Esc` keeps the current one |
+| `F2` / gear | Settings: appearance and explicit mood model access; always available |
+| `m` | Directly choose the model Gentle Shell uses (listed from `gentle-shell -- --list-models`); `Enter` picks, `Esc` keeps the current one |
 | `s` | Save the audible song to Saved prompts, new, or existing playlist; `Enter` saves, `Esc` cancels; replacement is scoped to that group |
 | `p` / click **Playlist** | Open **My playlist** groups / **Default playlist**; Left/Right switch tabs, click/Enter opens a group or applies a song; Backspace returns to groups; `d` / `Delete` removes only saved songs; `Esc` closes |
 | `c` / **↻ off/on** | Toggle continuous playback from the selected song; in the picker, **Repeat from selection** starts at the highlighted song |
@@ -377,7 +391,7 @@ All music is generated: the composer builds every melody, counter-melody, bass l
 uv run pytest
 ```
 
-The suite needs no audio device and no Gentle Shell: the player and the TUI are tested with a fake output stream and a fake shell. When the soundfont is installed, the player and app tests run on the sampled backend.
+The suite needs no audio device and no Gentle Shell: the player and the TUI are tested with a fake output stream and a fake shell. When the soundfont is installed, the player and app tests run on the sampled backend. [CI on Linux, macOS and WSL](docs/ci.md) uses the locked Python 3.13 environment and documents its exact hardware-sensitive exclusion; CI is not a substitute for the full local command or a real audio-device check.
 
 <div align="right"><a href="#top">Back to top</a></div>
 

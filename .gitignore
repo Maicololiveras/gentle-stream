@@ -7,6 +7,11 @@
 .audio-windows-lifecycle.*/
 .audio-windows-independent.*/
 .delivery-pr/
+.playlist-checks/
+# Local ODD notes quote private paths from the user's requests; never publish them.
+/odd/tasks/customizable-appearance.md
+/odd/tasks/upstream-contribution.md
+/odd/tasks/named-playlists-controls.md
 __pycache__/
 *.pyc
 .pytest_cache/
