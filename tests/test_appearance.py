@@ -154,6 +154,28 @@ async def test_live_color_updates_and_command_palette(ui):
 
 
 @pytest.mark.asyncio
+async def test_settings_and_model_menus_explain_context_without_changing_music(ui):
+    from gentle_stream.app import ModelPicker
+    app, player, shell, store, library = ui
+    async with app.run_test(size=(80, 24)) as pilot:
+        before = [call for call in player.mock_calls if call[0] != 'spectrum']
+        await pilot.press('f2')
+        assert isinstance(app.screen, SettingsScreen)
+        assert 'music is unchanged' in shown(app, '#settings-description')
+        await app.screen.submit('model')
+        await pilot.pause()  # the pushed screen mounts on the next event-loop turn
+        assert isinstance(app.screen, ModelPicker)
+        assert 'Choose a mood model' in shown(app, '.heading')
+        assert 'future moods' in shown(app, '#model-description')
+        assert app.screen.query_one('#models').has_focus
+        await pilot.press('down', 'enter')
+        assert shell.model == 'provider/chosen-model'
+        assert [call for call in player.mock_calls if call[0] != 'spectrum'] == before
+        assert not store.path.exists() and not library.path.exists()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_settings_model_is_explicit_and_m_stays_direct(ui):
     from gentle_stream.app import ModelPicker
     app, p, shell, _, _ = ui

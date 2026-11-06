@@ -80,10 +80,11 @@ class ModelPicker(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "dismiss_picker", "Cancel")]
     DEFAULT_CSS = """
     ModelPicker { align: center middle; }
-    ModelPicker > Vertical { width: 60; height: auto; max-height: 80%; border: round $primary; padding: 0 1;
-                             background: $surface; }
-    ModelPicker .heading { color: $primary; text-style: bold; }
-    ModelPicker #picker-status { color: $text-muted; }
+    ModelPicker > Vertical { width: 60; max-width: 100%; height: auto; max-height: 80%;
+                             border: round $primary; padding: 1 2; background: $surface; }
+    ModelPicker .heading { color: $foreground; text-style: bold; }
+    ModelPicker #model-description { color: $text-muted; }
+    ModelPicker #picker-status { color: $accent; margin-top: 1; }
     ModelPicker OptionList, ModelPicker OptionList:focus { height: auto; max-height: 20; border: none;
                                                           background: $surface; }
     """
@@ -94,7 +95,8 @@ class ModelPicker(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static("Model for mood interpretation", classes="heading")
+            yield Static("Choose a mood model", classes="heading")
+            yield Static("For future moods · music keeps playing", id="model-description")
             yield Static("Loading models…", id="picker-status")
             yield OptionList(Option(DEFAULT_MODEL_LABEL, id=""), id="models")
 
@@ -131,11 +133,14 @@ class SaveDialog(ModalScreen[str | None]):
     DEFAULT_CSS = """
     SaveDialog { align: center middle; }
     SaveDialog > Vertical { width: 60; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto;
-                            border: round $primary; padding: 0 1; background: $surface; }
-    SaveDialog #save-submit { height: 1; min-height: 1; border: none; }
-    SaveDialog #save-playlist { display: none; }
-    SaveDialog .heading { color: $primary; text-style: bold; }
-    SaveDialog #save-status { color: $text-muted; }
+                            border: round $primary; padding: 1 2; background: $surface; }
+    SaveDialog .heading { color: $foreground; text-style: bold; margin-bottom: 1; }
+    SaveDialog .field-label { color: $accent; }
+    SaveDialog #save-submit { height: 1; min-height: 1; border: none; background: $primary;
+                             color: $background; text-style: bold; margin-top: 1; }
+    SaveDialog #save-submit:focus { text-style: bold; }
+    SaveDialog #save-playlist, SaveDialog #save-playlist-label { display: none; }
+    SaveDialog #save-status { color: $text-muted; margin-top: 1; }
     SaveDialog Input { border: round $panel; background: $surface; }
     SaveDialog Input:focus { border: round $primary; }
     """
@@ -150,20 +155,33 @@ class SaveDialog(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("Save what is playing", classes="heading")
+            yield Static("Song name", id="save-name-label", classes="field-label")
             yield Input(self.initial, placeholder="Song name", max_length=NAME_MAX, id="save-name")
+            yield Static("Destination", id="save-destination-label", classes="field-label")
             yield Select([(Text("Saved prompts (legacy)"), "legacy"), (Text("New playlist…"), "new"),
                           *[(Text(name), key) for key, name in self.groups.items()]],
                          value="legacy", allow_blank=False, id="save-destination")
+            yield Static("Playlist name", id="save-playlist-label", classes="field-label")
             yield Input(placeholder="New playlist name", max_length=NAME_MAX, id="save-playlist")
             yield Button("Save (Enter)", id="save-submit")
-            yield Static(Text(self.error or "Enter to save · Esc to cancel"), id="save-status")
+            yield Static(Text(self.error or "Enter opens · ↑↓ choose · Enter selects · Enter again saves · Esc cancels"),
+                         id="save-status")
 
     def on_mount(self) -> None:
         self.query_one("#save-name", Input).focus()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         event.stop()
-        self.query_one("#save-playlist", Input).display = event.value == "new"
+        is_new = event.value == "new"
+        playlist_name = self.query_one("#save-playlist", Input)
+        playlist_name.display = is_new
+        self.query_one("#save-playlist-label", Static).display = is_new
+        if is_new:
+            playlist_name.focus()
+        elif event.value in self.groups:
+            # After choosing an existing group, Enter should use the dialog's
+            # Save action rather than reopening the focused Select dropdown.
+            self.query_one("#save-submit", Button).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()  # otherwise it bubbles to the app and is taken as a mood
@@ -202,11 +220,13 @@ class PresetPicker(ModalScreen[Preset | None]):
     ]
     DEFAULT_CSS = """
     PresetPicker { align: center middle; }
-    PresetPicker > Vertical { width: 72; max-width: 100%; height: 80%; border: round $primary; padding: 0 1;
+    PresetPicker > Vertical { width: 72; max-width: 100%; height: 80%; border: round $primary; padding: 1 2;
                               background: $surface; }
-    PresetPicker .heading { color: $primary; text-style: bold; }
+    PresetPicker .heading { color: $foreground; text-style: bold; }
+    PresetPicker #picker-description { color: $text-muted; }
     PresetPicker Tabs { background: $surface; }
-    PresetPicker #presets-status { color: $text-muted; }
+    PresetPicker #presets-breadcrumb { color: $accent; }
+    PresetPicker #presets-status { color: $text-muted; margin-top: 1; }
     PresetPicker #picker-actions { height: 1; }
     PresetPicker Button { height: 1; min-height: 1; width: auto; border: none; padding: 0 1; }
     PresetPicker Button:focus { text-style: bold reverse; }
@@ -233,12 +253,13 @@ class PresetPicker(ModalScreen[Preset | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static("Playlist · generative styles, not recordings", classes="heading")
+            yield Static("Playlists", classes="heading")
+            yield Static("Generative styles · not recordings", id="picker-description")
             yield Tabs(Tab("My playlist", id="my-playlist"),
                        Tab("Default playlist", id="default-playlist"), active="my-playlist")
             yield Static(id="presets-breadcrumb")
-            yield Static(id="presets-status")
             yield OptionList(id="presets")
+            yield Static(id="presets-status")
             with Horizontal(id="picker-actions"):
                 yield Button("< My playlists", id="playlist-back", tooltip="Back to groups (Backspace)")
                 yield Button("Repeat from selection", id="playlist-loop", tooltip="Continuous from selected song (c)")
@@ -379,6 +400,7 @@ class StreamApp(App):
     #commands Button { height: 1; min-height: 1; min-width: 5; width: auto; border: none;
                        padding: 0 1; background: #000000; color: $primary; }
     #commands Button:focus { text-style: bold; color: $foreground; }
+    #commands #play.paused, #commands #play.paused:focus { color: #00a6ed; }
     #commands #model-command { min-width: 26; }
     #commands #continuous { min-width: 7; }
     Screen.compact #panel { padding: 0 1; margin-top: 0; }
@@ -502,6 +524,7 @@ class StreamApp(App):
         audible = f" · {escape(audible_name)} #{audible_index + 1}" if isinstance(audible_name, str) and isinstance(audible_index, int) else ""
         w["state"].update(f"{state} · piece {now.piece} · bar {now.bar + 1} · vol {round(p.volume * 100)}%{audible}")
         self._buttons["play"].label = "⏸" if p.playing else "▶"
+        self._buttons["play"].set_class(not p.playing, "paused")
         gap = ' ' * self.preferences.icon_gap
         self._buttons["continuous"].label = f"↻{gap}{'on' if p.continuous is True else 'off'}"
 

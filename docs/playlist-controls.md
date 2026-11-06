@@ -1,6 +1,6 @@
 # Save and repeat a playlist from your selected song
 
-Use the existing Textual Playlist panel and the flat black command strip directly above the mood input. No browser or separate player is needed. All keyboard shortcuts remain available; Tab focuses buttons, and tooltips describe actions and shortcuts. `↻  off` / `↻  on` and play/pause glyphs show state without relying on color. The left group is **💾 ↻  off/on ✎ ☷**; the full-strip center is **⏮ ⏸/▶ ⏭**; the right group is **⚙ chosen model − +**. Narrow terminals scroll each side group independently; focusing a side button brings it into view without moving the three transport buttons. At 24 rows or fewer, tighter panel spacing keeps the spectrum, state, model and status inside the panel. Long status/model lines have full hover tooltips.
+Use the existing Textual Playlist panel and the flat black command strip directly above the mood input. No browser or separate player is needed. All keyboard shortcuts remain available; Tab focuses buttons, and tooltips describe actions and shortcuts. `↻  off` / `↻  on` and play/pause glyphs show state without relying on color. The left group is **💾 ↻  off/on ✎ ☷**; the full-strip center is **⏮ ⏸/▶ ⏭**; the paused **▶** is also blue while its button and the strip stay black and centered; the right group is **⚙ chosen model − +**. Narrow terminals scroll each side group independently; focusing a side button brings it into view without moving the three transport buttons. At 24 rows or fewer, tighter panel spacing keeps the spectrum, state, model and status inside the panel. Long status/model lines have full hover tooltips.
 
 The gear now opens **Settings**, including appearance and explicit **Choose mood
 model…** access; **m** still opens the model picker directly. **F2** always recovers
@@ -10,7 +10,14 @@ See [Appearance settings](appearance.md) for preview/save/cancel, visibility and
 
 ## Quick path
 
-1. Press **s** (or the **💾** button) to save the currently audible song. Enter a song name and choose **Saved prompts**, **New playlist…**, or an existing named playlist. New reveals the playlist name field. Enter or **Save** commits both the new group and song together.
+Playlist opens with a separate title, description, My/Default tabs, breadcrumb and a hint below the song list. Save shows visible labels for the song and destination; choosing **New playlist…** reveals its playlist-name label and field together. Tab, arrows, Enter, Escape and the existing shortcuts still work, including in narrow terminals.
+
+1. Press **s** (or **💾**) to save the currently audible song. Enter a song name
+   and choose **Saved prompts**, **New playlist…**, or an existing named playlist.
+   With the keyboard, Tab to **Destination**, Enter opens it, ↑/↓ highlights a
+   playlist, Enter selects it, and Enter again saves. An existing selection
+   focuses **Save** so the final Enter does not reopen the picker. **New playlist…**
+   reveals and focuses its name field; Enter there saves. Clicking **Save** works too.
 2. Open **Playlist** (**p** or **☷**). Under **My playlist**, open **Saved prompts** or a named group. Songs appear in the same panel. **< My playlists** / Backspace returns to groups; Left/Right switches the My/Default tabs.
 3. Highlight a song, then choose **Repeat from selection** or press **c**. Playback begins at that song, advances after each complete composition, and wraps in alphabetical display order. **Default playlist** works the same way but cannot be edited.
 4. Click **↻ on** or press **c** outside the input to turn rotation off. Current audio is not cut or restarted. Already-buffered transitions may still be heard.

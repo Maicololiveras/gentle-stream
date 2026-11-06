@@ -189,6 +189,34 @@ async def test_centered_transport_and_independent_side_groups(ui, size):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(60, 20), (80, 24), (120, 30)])
+async def test_paused_play_is_blue_without_shifting_centered_transport(ui, size):
+    app, player, shell, store, library = ui
+    async with app.run_test(size=size) as pilot:
+        strip = app.query_one("#commands")
+        transport = app.query_one("#transport")
+        play = app.query_one("#play", Button)
+        before = transport.region
+        assert await pilot.click("#play")
+        await pilot.pause()
+        assert player.playing is False and str(play.label) == "▶"
+        assert play.styles.color.hex.lower() == "#00a6ed"
+        assert play.styles.background.hex == strip.styles.background.hex == "#000000"
+        assert play.region.width == 5 and transport.region == before
+        play.focus()
+        await pilot.pause()
+        assert play.styles.color.hex.lower() == "#00a6ed"
+        assert await pilot.click("#play")
+        await pilot.pause()
+        assert player.playing is True and str(play.label) == "⏸"
+        assert play.styles.background.hex == "#000000"
+        assert play.region.width == 5 and transport.region == before
+        assert player.toggle.call_count == 2
+        assert not store.path.exists() and not library.path.exists()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_save_new_existing_and_legacy_snapshot_replacement(ui):
     app, p, shell, store, library = ui
     async with app.run_test() as pilot:
@@ -224,6 +252,58 @@ async def test_save_new_existing_and_legacy_snapshot_replacement(ui):
         assert store.path.read_bytes() == legacy
         shell.interpret_with_usage.assert_not_called()
         shell.list_models.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enter_after_selecting_existing_playlist_saves_the_song(ui):
+    app, player, shell, store, library = ui
+    library.save("Night", "Existing", DEFAULT)
+    before = library.path.read_bytes()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#save-name", Input).value = "Fresh"
+        await pilot.click("#save-destination")  # SelectCurrent receives the pointer event
+        await pilot.press("end", "enter")  # select the existing group using the public picker
+        await pilot.pause()
+        assert app.screen.query_one("#save-destination", Select).value == "group-0"
+        await pilot.press("enter")  # dialog says Enter saves, even after a Select choice
+        await pilot.pause()
+        assert library.get("Night", "Fresh") is not None
+        assert library.get("Night", "Existing") is not None
+        assert library.path.read_bytes() != before
+        assert not store.path.exists()
+        assert "Saved" in shown(app, "#status")
+        player.toggle.assert_not_called()
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_keyboard_only_existing_playlist_selection_and_enter_save(ui):
+    app, player, shell, store, library = ui
+    library.save("Night", "Existing", DEFAULT)
+    before = library.path.read_bytes()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#save-name", Input).value = "Keyboard"
+        await pilot.press("tab")
+        destination = app.screen.query_one("#save-destination", Select)
+        assert destination.has_focus_within
+        assert "Enter opens" in shown(app, "#save-status")
+        assert "Enter again saves" in shown(app, "#save-status")
+        await pilot.press("enter", "down", "down", "enter")
+        await pilot.pause()
+        assert destination.value == "group-0"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert library.get("Night", "Keyboard") is not None
+        assert library.get("Night", "Existing") is not None
+        assert library.path.read_bytes() != before
+        assert not store.path.exists()
+        assert "Saved" in shown(app, "#status")
+        player.toggle.assert_not_called()
+        shell.interpret_with_usage.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -489,4 +569,32 @@ async def test_previous_old_daemon_error_visible_ui_alive(ui):
         assert app.is_running and p.playback_state() == before
         await pilot.press("escape", "space")
         assert not p.playing
+        shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_playlist_and_save_menus_keep_a_clear_keyboard_hierarchy(ui):
+    app, player, shell, store, library = ui
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        picker = app.screen
+        assert isinstance(picker, PresetPicker)
+        assert "Playlists" in shown(app, ".heading")
+        assert "Generative styles" in shown(app, "#picker-description")
+        assert picker.query_one("#presets-status").region.y > picker.query_one("#presets").region.y
+        assert picker.query_one("#presets", OptionList).has_focus
+        await pilot.press("escape", "s")
+        await pilot.pause()
+        assert isinstance(app.screen, SaveDialog)
+        assert "Song name" in shown(app, "#save-name-label")
+        assert "Destination" in shown(app, "#save-destination-label")
+        assert not app.screen.query_one("#save-playlist-label").display
+        app.screen.query_one("#save-destination", Select).value = "new"
+        await pilot.pause()
+        assert app.screen.query_one("#save-playlist-label").display
+        assert app.screen.query_one("#save-playlist", Input).display
+        await pilot.press("escape")
+        assert not store.path.exists() and not library.path.exists()
+        player.toggle.assert_not_called()
         shell.interpret_with_usage.assert_not_called()

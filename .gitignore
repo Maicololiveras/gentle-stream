@@ -12,6 +12,11 @@
 /odd/tasks/customizable-appearance.md
 /odd/tasks/upstream-contribution.md
 /odd/tasks/named-playlists-controls.md
+/odd/tasks/menu-polish.md
+# Local artboard alternatives are not part of the runtime contribution.
+/design/system.md
+/design/system.html
+/design/playlist-menu-polish/
 __pycache__/
 *.pyc
 .pytest_cache/
