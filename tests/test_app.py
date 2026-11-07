@@ -552,7 +552,7 @@ async def test_the_spectrum_fills_the_free_height_and_the_info_sits_by_the_input
         await pilot.pause(0.3)
         spectrum = app.query_one("#spectrum")
         assert spectrum.region.height >= min_rows
-        assert app.query_one("#commands").region.height == (8 if size[1] > 24 else 2)
+        assert app.query_one("#commands").region.height == 1
         assert len(str(spectrum.render()).split("\n")) == spectrum.region.height
         status, mood = app.query_one("#status"), app.query_one("#mood")
         gap = mood.region.y - (status.region.y + status.region.height)

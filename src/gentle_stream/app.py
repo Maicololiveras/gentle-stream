@@ -399,22 +399,21 @@ class StreamApp(App):
     #spectrum { height: 1fr; min-height: 5; margin: 1 0; }
     #state { color: $text-muted; }
     #status { margin-top: 1; }
-    #commands { height: 8; margin: 0 1; overflow: hidden; background: #000000; }
+    #commands { height: 1; margin: 0 1; overflow: hidden; background: #000000; }
     #commands-left, #commands-right { width: 1fr; height: 1fr; overflow-x: auto; overflow-y: hidden;
                                       scrollbar-size-horizontal: 0; align-vertical: bottom; }
     #commands-right { align-horizontal: right; }
     #transport { width: 15; height: 1fr; align-vertical: bottom; }
-    #volume-meter { width: 19; min-width: 19; height: 8; background: #000000; overflow: hidden; }
+    #volume-meter { width: 13; min-width: 13; height: 1; background: #000000; overflow: hidden; }
     #transport Button { width: 5; }
     #commands Button { height: 1; min-height: 1; min-width: 5; width: auto; border: none;
                        padding: 0 1; background: #000000; color: $primary; }
     #commands Button:focus { text-style: bold; color: $foreground; }
     #commands #play.paused, #commands #play.paused:focus { color: #00a6ed; }
-    #commands #model-command { min-width: 26; }
+    #commands #model-command { min-width: 13; }
     #commands #continuous { min-width: 7; }
     Screen.compact #panel { padding: 0 1; margin-top: 0; }
-    Screen.compact #commands, Screen.compact #volume-meter { height: 2; }
-    Screen.compact #volume-meter { width: 9; min-width: 9; }
+    Screen.compact #commands, Screen.compact #volume-meter { height: 1; }
     Screen.compact #spectrum { margin: 0; }
     Screen.compact #details, Screen.compact #mood-line, Screen.compact #state,
     Screen.compact #model, Screen.compact #status { height: 1; }
@@ -554,8 +553,11 @@ class StreamApp(App):
         self._w["model"].tooltip = Text(f"model: {model_label(self.shell.model)}{session}")
         label = self.shell.model or "default"
         short = label if len(label) <= 22 else label[:10] + "…" + label[-11:]
-        self._buttons["model-command"].label = Text(f"⚙{' ' * self.preferences.icon_gap}{short}")
-        self._buttons["model-command"].tooltip = Text(f"Settings (F2) · direct model picker (m) · {model_label(self.shell.model)}")
+        button_label = f"⚙{' ' * self.preferences.icon_gap}{short}"
+        button = self._buttons["model-command"]
+        button.label = Text(button_label)
+        button.styles.min_width = max(13, len(button_label) + 2)  # Include button padding; scroll if narrow.
+        button.tooltip = Text(f"Settings (F2) · direct model picker (m) · {model_label(self.shell.model)}")
 
     def _status(self, text: str) -> None:
         self._w["status"].update(text)

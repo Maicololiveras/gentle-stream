@@ -43,14 +43,18 @@ change musical parameters. Submitting the separate mood input still interprets a
 At wide terminal widths, each configured band occupies additional columns rather than leaving the rest of the graph blank. Segmented bars retain their one-cell spacing. These are spectrum **visualizations**, not DSP equalizer controls. Fonts, glyph
 availability and terminal transparency are terminal-owned; no unsupported font or
 terminal-transparent theme is offered. Custom colors can reduce contrast: choose a
-readable accent/background pair or use Defaults. The flat black toolbar expands vertically for the five-bar volume indicator but keeps
-bold-only focused buttons, horizontally centered transport and independently scrolling
-side groups. The paused Play glyph alone uses blue without changing its button
-background or position. Track details and mood share one upper metadata row with
-full hover tooltips, leaving room for the expanded strip while the model, playback
-state and status remain separate. At 24 rows or fewer the gauge compresses to two
-rows; the percentage remains below the bars. Hiding the graph shrinks the panel rather than reserving empty graph
-space. **/** temporarily reveals and focuses a hidden mood input without changing its
+readable accent/background pair or use Defaults. The flat black toolbar uses one
+row on all terminal sizes. A single horizontal volume gauge sits between −/+ to
+the left of Settings: eight pink `▰/▱` segments with the exact numeric percentage
+to their right. The volume controls still move in 5% steps (Up/Down in 1% steps);
+because there are only eight segments, not every numeric step changes a segment.
+It retains bold-only focused buttons, horizontally centered transport and
+independently scrolling side groups.
+The paused Play glyph alone uses blue without changing its button background or
+position. Track details and mood share one upper metadata row with full hover
+tooltips, while the model, playback state and status remain separate. At 24 rows
+or fewer the same one-row gauge remains visible.
+Hiding the graph shrinks the panel rather than reserving empty graph space. **/** temporarily reveals and focuses a hidden mood input without changing its
 saved visibility; applying preferences again restores the configured visibility.
 
 Refresh uses one UI-thread timer. Applying preferences stops the previous timer;

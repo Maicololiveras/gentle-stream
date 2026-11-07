@@ -159,7 +159,7 @@ async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("size", [(60, 20), (80, 24), (200, 46)])
+@pytest.mark.parametrize("size", [(60, 20), (80, 24), (100, 30), (200, 46)])
 async def test_volume_meter_lives_between_controls_without_moving_transport(ui, size):
     app, player, shell, store, library = ui
     player.volume = 0
@@ -170,14 +170,18 @@ async def test_volume_meter_lives_between_controls_without_moving_transport(ui, 
         right = app.query_one("#commands-right")
         meter = app.query_one("#volume-meter")
         assert strip.styles.background.hex == "#000000"
-        assert strip.region.height >= (8 if size[1] > 24 else 2)
+        assert strip.region.height == 1
         assert strip.region.contains_region(center.region)
         assert abs((center.region.x * 2 + center.region.width) -
                    (strip.region.x * 2 + strip.region.width)) <= 1
         assert [child.id for child in right.children] == ["quieter", "volume-meter", "louder", "model-command"]
-        assert meter.region.width >= (19 if size[1] > 24 else 9)
+        assert meter.region.width == 13 and meter.region.height == 1
+        model = app.query_one('#model-command', Button)
+        assert meter.region.right <= model.region.x
+        if size[0] >= 100:
+            assert model.region.width <= 14  # Default label must not push the gauge left.
         assert strip.region.contains_region(meter.region)
-        assert "0%" in meter.render().plain and "█" not in meter.render().plain
+        assert meter.render().plain == "▱" * 8 + " 0%"
         at_zero = meter.render().plain
         state = shown(app, "#state")
         assert "Playing" in state and "piece 1" in state and "bar 1" in state
@@ -193,15 +197,11 @@ async def test_volume_meter_lives_between_controls_without_moving_transport(ui, 
         await pilot.pause()
         assert await pilot.click("#louder")
         await pilot.pause()
-        assert player.volume == .05 and "5%" in meter.render().plain
+        assert player.volume == .05 and meter.render().plain == "▱" * 8 + " 5%"
         assert meter.render().plain != at_zero
-        if size[1] > 24:
-            assert meter.render().plain.count("█") == 1
         await pilot.press("plus", "minus", "down", "up")
         await pilot.pause()
-        assert player.volume == .05 and "5%" in meter.render().plain
-        if size[1] > 24:
-            assert meter.render().plain.count("█") == 1
+        assert player.volume == .05 and meter.render().plain == "▱" * 8 + " 5%"
         assert player.set_volume.call_count == 5
         player.toggle.assert_not_called()
         player.next.assert_not_called()
