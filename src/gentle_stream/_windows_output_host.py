@@ -38,6 +38,10 @@ def main(argv=None):
     errors = []
     cancelled = threading.Event()
 
+    def native_error(message):
+        code = process.poll() if process is not None else None
+        return f'{message}; FFplay exit status {code}' if code is not None else message
+
     def acknowledge(op, sequence):
         with output_lock:
             sys.stdout.buffer.write(ACK.pack(op, sequence))
@@ -115,25 +119,25 @@ def main(argv=None):
                 if chunk is None:
                     raise ValueError('truncated PCM frame')
                 if process is None or process.poll() is not None or errors:
-                    raise OSError('native output unavailable')
+                    raise OSError(native_error('native output unavailable'))
                 pending.put_nowait((sequence, chunk))
             elif op == b'P':
                 if errors or (process is not None and process.poll() is not None):
-                    raise OSError('native output failed before pause')
+                    raise OSError(native_error('native output failed before pause'))
                 cut_sink()
                 acknowledge(op, sequence)
             else:
                 if process is None:
                     start_sink()
                 elif process.poll() is not None or errors:
-                    raise OSError('native output unavailable')
+                    raise OSError(native_error('native output unavailable'))
                 acknowledge(op, sequence)
         if process is None:
             return 0
         pending.put(None, timeout=1)
         writer.join(timeout=1)
         if writer.is_alive() or errors:
-            raise OSError('native audio writer stalled or failed')
+            raise OSError(native_error('native audio writer stalled or failed'))
         return process.wait(timeout=1)
     except (OSError, ValueError, queue.Full, subprocess.TimeoutExpired) as error:
         print(f'Windows audio: {error}', file=sys.stderr)

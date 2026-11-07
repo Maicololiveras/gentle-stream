@@ -80,9 +80,14 @@ under pipe backpressure; they do not measure acoustic latency.
 The private transport uses bounded frames (at most 8192 PCM bytes), one outstanding
 PCM acknowledgment, and pause/resume acknowledgments. Each pipe write has a
 two-second deadline and each acknowledgment a three-second deadline. Invalid or
-truncated messages and output failures fail visibly through the control call,
-player log and `ctl status`; no silent fallback or automatic recovery is performed.
-All process operations run outside the audio callback. EOF/failure still cleans up
+truncated messages and output failures fail visibly through the control call and
+`ctl status`; no silent fallback or automatic recovery is performed. When the
+native supervisor exits, `audio_output_error` includes its exit status and up to
+the last 512 bytes of native stderr (including FFplay errors, when emitted). If
+FFplay has already exited, the native host reports its exit status too. An empty
+stderr or a zero exit status does not prove speaker output; pause/resume ACKs do
+not confirm that FFplay has opened the device. All process operations run outside
+the audio callback. EOF/failure still cleans up
 the owned native child, using its native Popen handle rather than a Linux PID,
 global process search or taskkill. The protocol accepts no paths or commands.
 

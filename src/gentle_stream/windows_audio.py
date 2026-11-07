@@ -64,6 +64,10 @@ class WindowsPCMStream:
         self._sequence = 0
         self._generation = 0
         self._acks = bytearray()
+        self._stderr_tail = bytearray()
+        self._stderr_lock = threading.Lock()
+        self._stderr_stop = threading.Event()
+        self._stderr_thread = None
         self._process = None
         self._thread = None
         self.error = None
@@ -74,10 +78,15 @@ class WindowsPCMStream:
         host = Path(__file__).with_name('_windows_output_host.py').read_text(encoding='utf-8')
         self._process = subprocess.Popen(
             [self._python, '-I', '-B', '-u', '-c', host, self._ffplay, str(self._rate)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         try:
             os.set_blocking(self._process.stdin.fileno(), False)
             os.set_blocking(self._process.stdout.fileno(), False)
+            if getattr(self._process, 'stderr', None) is not None:
+                reader = threading.Thread(target=self._collect_stderr, daemon=True,
+                                          name='gentle-stream-windows-errors')
+                reader.start()
+                self._stderr_thread = reader
             self._thread = threading.Thread(target=self._run, daemon=True, name='gentle-stream-windows')
             self._thread.start()
         except Exception:
@@ -87,7 +96,46 @@ class WindowsPCMStream:
                 self._process.wait(timeout=6)
             finally:
                 self._process.stdout.close()
+                if self._stderr_thread is not None:
+                    self._stderr_stop.set()
+                    self._stderr_thread.join(timeout=.2)
+                elif getattr(self._process, 'stderr', None) is not None:
+                    self._process.stderr.close()
             raise
+
+    def _collect_stderr(self):
+        pipe = self._process.stderr
+        try:
+            fd = pipe.fileno()
+            os.set_blocking(fd, False)
+            while not self._stderr_stop.is_set():
+                if not select.select([fd], [], [], .05)[0]:
+                    continue
+                try:
+                    chunk = os.read(fd, 4096)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    break
+                with self._stderr_lock:
+                    self._stderr_tail.extend(chunk)
+                    del self._stderr_tail[:-512]
+        except (OSError, ValueError):
+            pass  # The supervisor exit code remains available when stderr is unreadable.
+        finally:
+            pipe.close()
+
+    def _diagnostic(self, message):
+        code = self._process.poll()
+        if code is not None and self._stderr_thread is not None:
+            self._stderr_thread.join(timeout=.2)
+        with self._stderr_lock:
+            native = ' '.join(self._stderr_tail.decode('utf-8', errors='replace').split())[-512:]
+        if code is not None and 'supervisor exit status ' not in message:
+            message += f'; supervisor exit status {code}'
+        if native and 'native stderr: ' not in message:
+            message += f'; native stderr: {native}'
+        return message
 
     def _write(self, data):
         fd = self._process.stdin.fileno()
@@ -97,7 +145,7 @@ class WindowsPCMStream:
             if self._stop.is_set():
                 raise InterruptedError('Windows output stopped')
             if self._process.poll() is not None:
-                raise BrokenPipeError('Windows audio supervisor exited; see player.log')
+                raise BrokenPipeError(self._diagnostic('Windows audio supervisor exited'))
             if time.monotonic() >= deadline:
                 raise TimeoutError('Windows audio write timed out')
             if not select.select([], [fd], [], .02)[1]:
@@ -140,7 +188,12 @@ class WindowsPCMStream:
                 if select.select([fd], [], [], .02)[0]:
                     part = os.read(fd, 5 - len(self._acks))
                     if not part:
-                        raise BrokenPipeError('Windows audio acknowledgment pipe closed')
+                        if self._process.poll() is None:
+                            try:
+                                self._process.wait(timeout=.2)
+                            except subprocess.TimeoutExpired:
+                                pass
+                        raise BrokenPipeError(self._diagnostic('Windows audio acknowledgment pipe closed'))
                     self._acks.extend(part)
             raise InterruptedError('Windows output stopped')
 
@@ -154,11 +207,11 @@ class WindowsPCMStream:
                 sequence = self._packet(op)
             self._ack(op, sequence)
         except Exception as error:
-            self.error = str(error)
+            self.error = self._diagnostic(str(error))
             self._stop.set()
             # Existing public handlers return ValueError messages to clients;
             # keep their connection alive rather than implying the daemon vanished.
-            raise ValueError(f'Windows output control failed: {error}') from error
+            raise ValueError(f'Windows output control failed: {self.error}') from error
 
     def pause(self):
         with self._controls:
@@ -216,17 +269,24 @@ class WindowsPCMStream:
             try:
                 code = self._process.wait(timeout=6)
                 if code:
-                    self.error = self.error or f'Windows audio supervisor exited with status {code}; see player.log'
+                    self.error = self._diagnostic(self.error or 'Windows audio supervisor exited')
             except subprocess.TimeoutExpired:
                 self.error = 'Windows audio supervisor did not exit after EOF; inspect player.log'
             self._process.stdout.close()
 
     def stop(self):
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=7)
-            if self._thread.is_alive() or self._process.poll() is None:
-                raise RuntimeError('Windows audio supervisor did not stop; inspect player.log')
+        try:
+            if self._thread is not None:
+                self._thread.join(timeout=7)
+                if self._thread.is_alive() or self._process.poll() is None:
+                    raise RuntimeError('Windows audio supervisor did not stop; inspect player.log')
+        finally:
+            self._stderr_stop.set()
+            if self._stderr_thread is not None:
+                self._stderr_thread.join(timeout=.2)
+                if self._stderr_thread.is_alive():
+                    raise RuntimeError('Windows audio stderr reader did not stop; inspect player.log')
 
     def close(self):
         self.stop()
