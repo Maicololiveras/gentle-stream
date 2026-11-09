@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from gentle_stream.bridge import (GentleShell, InterpretError, PROMPT, Usage, genre_lines,
-                                  GENRE_NAMES, KEYS, MODES, CHORD_INSTRUMENTS,
+                                  MODEL_GENRE_NAMES, KEYS, MODES, CHORD_INSTRUMENTS,
                                   LEAD_INSTRUMENTS, DRUMS)
 from gentle_stream.style import Style
 from gentle_stream import voice
@@ -20,7 +20,7 @@ class VoiceBridgeTests(unittest.TestCase):
         expected = PROMPT.format(mood="calm", current=json.dumps(cur), keys=", ".join(KEYS),
                                  modes=", ".join(MODES), chords=", ".join(CHORD_INSTRUMENTS),
                                  leads=", ".join(LEAD_INSTRUMENTS), drums=", ".join(DRUMS),
-                                 genre_names=", ".join(GENRE_NAMES), genres=genre_lines())
+                                 genre_names=", ".join(MODEL_GENRE_NAMES), genres=genre_lines())
         with patch.object(GentleShell, "_run", return_value=json.dumps({"name": "Calm", "voice_lines": LINES})) as run, \
                 patch.object(voice, "prepare") as prepare:
             style, usage = GentleShell().interpret_with_usage("calm", current)

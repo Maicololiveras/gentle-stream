@@ -155,9 +155,26 @@ def test_prompt_lists_every_genre_with_its_description(fake):
     prompt = argv()[-1]
     assert '"genre"' in prompt and '"genre": "jazz"' in prompt   # the current genre is part of the context
     for name, genre in REGISTRY.items():
-        assert f"{name}: {genre.description}" in prompt
+        if name == 'reggaeton':
+            assert f"{name}: {genre.description}" not in prompt  # explicit mood words route locally
+        else:
+            assert f"{name}: {genre.description}" in prompt
     assert "lofi is the default" in prompt
     assert "never reproduce" in prompt.lower()
+
+
+def test_explicit_reggaeton_routes_locally_without_expanding_the_model_prompt(fake):
+    run, argv = fake
+    shell = GentleShell(binary=str(run('{"name":"New Beat","genre":"lofi","bpm":98}')))
+    style = shell.interpret('reguetón original con guitarra', Style())
+    prompt = argv()[-1]
+    assert style.genre == 'reggaeton' and style.bpm == 98
+    assert 'reggaeton:' not in prompt and 'reggaeton' not in prompt.split('Genres (')[0]
+    assert 'electro:' in prompt
+    assert shell.interpret('dembow original', Style()).genre == 'reggaeton'
+    assert shell.interpret('reggaeton nuevo', Style()).genre == 'reggaeton'
+    assert shell.interpret('sin reguetón, solo electrónica', Style()).genre == 'lofi'
+    assert shell.interpret('calm electronic groove', Style()).genre == 'lofi'
 
 
 def test_the_model_picks_the_genre_and_invalid_ones_keep_the_current(fake):

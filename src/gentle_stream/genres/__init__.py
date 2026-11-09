@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from . import ambient, chiptune, cumbia, dubstep, electro, electrohouse, jazz, lofi, rock, synthwave
+from . import ambient, chiptune, cumbia, dubstep, electro, electrohouse, jazz, lofi, reggaeton, rock, synthwave
 from . import chill_electronic, electro_trap, hiphop, lofi_trap, trap
 from .base import Genre, Master, Piece
 
@@ -12,7 +12,7 @@ DEFAULT = "lofi"
 REGISTRY: dict[str, Genre] = {
     m.GENRE.name: m.GENRE for m in (
         lofi, ambient, chiptune, synthwave, jazz, rock, electro, electrohouse, cumbia, dubstep,
-        hiphop, trap, chill_electronic, lofi_trap, electro_trap,
+        hiphop, trap, chill_electronic, lofi_trap, electro_trap, reggaeton,
     )
 }
 NAMES = tuple(REGISTRY)

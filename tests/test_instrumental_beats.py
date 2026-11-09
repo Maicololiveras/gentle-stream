@@ -40,7 +40,7 @@ def events(name, drums="busy", lead="piano", layers=None, energy=0.9):
 
 class InstrumentalBeatsTests(unittest.TestCase):
     def test_registry_style_variation_and_metadata(self):
-        self.assertEqual(genres.NAMES, OLD + NEW)
+        self.assertEqual(genres.NAMES, OLD + NEW + ("reggaeton",))
         for name in NEW:
             with self.subTest(name=name):
                 genre = genres.get(name)
@@ -56,7 +56,7 @@ class InstrumentalBeatsTests(unittest.TestCase):
 
     def test_hints_and_builtin_discovery_without_ai(self):
         styles = default_playlist()
-        self.assertEqual(tuple(s.genre for s in styles), OLD + NEW)
+        self.assertEqual(tuple(s.genre for s in styles), OLD + NEW + ("reggaeton",))
         shell = GentleShell()
         shell._run = Mock(return_value='{"genre":"trap"}')
         style, _ = shell.interpret_with_usage("beats de trap sin voz", Style())

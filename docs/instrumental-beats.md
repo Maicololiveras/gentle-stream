@@ -19,6 +19,18 @@ Instrumental melodies remain available: no vocals does not mean no melody.
 | `lofi_trap` | Warm lo-fi keys and tape with trap drums and 808 bass | “Mezcla lo-fi con trap, teclas cálidas y ritmo relajado, sin voz” |
 | `electro_trap` | Robotic synth stabs and melodic lead with trap drums | “Electro con trap instrumental, sintetizadores y bajo 808, sin voz” |
 
+## Original reggaeton groove
+
+Choose `reggaeton` in **Default playlist** without a model call, or include the literal word
+**reguetón**, **reggaeton** or **dembow** in a mood, such as “Reguetón original con guitarra
+nylon, bajo redondo y ritmo para bailar”. This uses the existing single model interpretation;
+the explicit genre word is routed locally and does not expand the ordinary model prompt.
+The two-bar dembow, clap/snare backbeats, upbeat guitar chops and bass notes are arranged
+from the shared composer's own harmony and melody, not from a referenced recording.
+`chords=nylon` and `lead=nylon` select plucked-string colours (procedural or GM sampled).
+They are synthetic approximations, not a recording of a guitarist. Actual provider cost,
+sound quality and live playback have not been verified by an offline render.
+
 ## Growth and strength
 
 Try “Rap electrónico trap instrumental, sensación de crecimiento y fuerza,

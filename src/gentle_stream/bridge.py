@@ -19,6 +19,16 @@ from .style import CHORD_INSTRUMENTS, DRUMS, KEYS, LEAD_INSTRUMENTS, MODES, Styl
 from . import voice
 
 QUIET_FLAGS = ("--no-session", "-nt", "-ns", "-np", "-nc", "--no-mcp", "--no-themes", "--no-skill-registry")
+# Explicit dembow/reggaeton words route locally; keep the AI prompt identical for every existing mood.
+MODEL_GENRE_NAMES = tuple(name for name in GENRE_NAMES if name != "reggaeton")
+REGGAETON_WORD = re.compile(r"\b(?:reggaet[oó]n|reguet[oó]n|dembow)\b", re.IGNORECASE)
+NEGATED_GENRE = re.compile(r"\b(?:sin|no|not|without)\s+(?:\w+\s+){0,2}$", re.IGNORECASE)
+
+
+def reggaeton_requested(mood: str) -> bool:
+    """Route an explicit positive request, not a request such as 'sin reguetón'."""
+    return isinstance(mood, str) and any(not NEGATED_GENRE.search(mood[:m.start()])
+                                         for m in REGGAETON_WORD.finditer(mood))
 
 PROMPT = """You are the composer of an endless, real-time generative music stream (lo-fi by default).
 Translate the listener's request (a feeling, a concept, a place, a scene; any language) into musical parameters.
@@ -58,6 +68,8 @@ def genre_lines() -> str:
     """One line per registered genre: description, tempo and mode hints, and what the tone colours mean."""
     lines = []
     for name, g in REGISTRY.items():
+        if name not in MODEL_GENRE_NAMES:
+            continue
         colours = ", ".join(f"{k} = {v}" for k, v in g.voices.items())
         lines.append(f"- {name}: {g.description} (typical bpm {g.bpm[0]}-{g.bpm[1]}; modes {', '.join(g.modes)}; "
                      f"{colours})")
@@ -211,7 +223,7 @@ class GentleShell:
         opted_in = voice_requested(mood)
         prompt = PROMPT.format(mood=mood, current=json.dumps(cur), keys=", ".join(KEYS), modes=", ".join(MODES),
                                chords=", ".join(CHORD_INSTRUMENTS), leads=", ".join(LEAD_INSTRUMENTS),
-                               drums=", ".join(DRUMS), genre_names=", ".join(GENRE_NAMES), genres=genre_lines())
+                               drums=", ".join(DRUMS), genre_names=", ".join(MODEL_GENRE_NAMES), genres=genre_lines())
         if opted_in:
             prompt = prompt.replace("with exactly these fields:", "with these fields plus voice_lines:")
             prompt += ('\nAlso include "voice_lines": exactly three thematic Spanish phrases for beginning, '
@@ -222,6 +234,8 @@ class GentleShell:
                        'Return only the sentences, not stage directions or instructions to speak.\n')
         text, usage = parse_output(self._run(self.command(prompt)))
         data = extract_json(text)
+        if reggaeton_requested(mood):
+            data["genre"] = "reggaeton"
         data["mood"] = mood
         # Never inherit stale lines or trust unsolicited voice from the model.
         data["voice_lines"] = data.get("voice_lines", ()) if opted_in else ()
