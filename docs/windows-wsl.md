@@ -83,8 +83,10 @@ two-second deadline and each acknowledgment a three-second deadline. Invalid or
 truncated messages and output failures fail visibly through the control call and
 `ctl status`; no silent fallback or automatic recovery is performed. When the
 native supervisor exits, `audio_output_error` includes its exit status and up to
-the last 512 bytes of native stderr (including FFplay errors, when emitted). If
-FFplay has already exited, the native host reports its exit status too. An empty
+the last 512 bytes of native stderr (including FFplay errors, when emitted).
+If a control error was reported earlier, the final diagnostic replaces its old
+stderr excerpt with the latest tail rather than hiding a later native failure.
+If FFplay has already exited, the native host reports its exit status too. An empty
 stderr or a zero exit status does not prove speaker output; pause/resume ACKs do
 not confirm that FFplay has opened the device. All process operations run outside
 the audio callback. EOF/failure still cleans up

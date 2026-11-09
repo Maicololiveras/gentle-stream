@@ -131,9 +131,13 @@ class WindowsPCMStream:
             self._stderr_thread.join(timeout=.2)
         with self._stderr_lock:
             native = ' '.join(self._stderr_tail.decode('utf-8', errors='replace').split())[-512:]
+        if native:
+            # The control path may have captured an earlier tail; the finalizer
+            # must report the latest native failure without duplicating it.
+            message = message.partition('; native stderr: ')[0]
         if code is not None and 'supervisor exit status ' not in message:
             message += f'; supervisor exit status {code}'
-        if native and 'native stderr: ' not in message:
+        if native:
             message += f'; native stderr: {native}'
         return message
 

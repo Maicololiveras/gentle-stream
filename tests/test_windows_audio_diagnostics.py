@@ -100,6 +100,29 @@ class DiagnosticCoverageTests(unittest.TestCase):
         self.assertIn("FFplay: output unavailable", str(caught.exception))
         self.assertEqual(stream.error, str(caught.exception).removeprefix('Windows output control failed: '))
 
+    def test_final_native_stderr_replaces_stale_control_diagnostic_in_public_state(self):
+        player = Player(SyntheticEngine())
+        stream = self.stream()
+        player._stream = stream  # Fake transport; no process or device is started.
+        player.output_underflows = None
+        stream._process = SimpleNamespace(poll=lambda: 23)
+        stream._paused.set()
+        stream._stderr_tail.extend(b"early supervisor error\n")
+        with patch.object(stream, "_packet", return_value=1), \
+             patch.object(stream, "_ack", side_effect=OSError("native control failed")):
+            with self.assertRaisesRegex(ValueError, "early supervisor error"):
+                player.play()
+        stream._stderr_tail.extend(b"final FFplay device failure\n")
+        # The worker's finalizer enriches the earlier control error after the native exit.
+        stream.error = stream._diagnostic(stream.error)
+        state = daemon.state(player)
+        self.assertEqual(state["audio_output"], "windows")
+        self.assertFalse(state["playing"])
+        self.assertIsNone(state["output_underflows"])
+        self.assertEqual(state["audio_output_error"],
+                         "native control failed; supervisor exit status 23; "
+                         "native stderr: early supervisor error final FFplay device failure")
+
     def test_writer_failure_includes_exited_ffplay_status(self):
         class Sink:
             def __init__(self):
