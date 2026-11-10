@@ -46,15 +46,16 @@ class FakeAudio:
     def stop(self):
         self._stop.set()
 
+    abort = stop  # Fake output has no downstream queue to drain.
+
     def close(self):
         if self._thread.is_alive():
             self._thread.join(timeout=2)
 
 
 def no_device(**kw):
-    import sounddevice as sd
-
-    raise sd.PortAudioError("Error querying device -1")
+    # Exercise startup-error transport without importing/probing a native audio host.
+    raise OSError("Error querying device -1")
 
 
 def wait_for(cond, timeout=10.0):
@@ -304,6 +305,27 @@ def test_playlist_snapshot_survives_detach_and_reconnect(runtime):
     attached.set_style(Style(name="Normal mood"))
     assert attached.playlist_name is None and not attached.continuous
     attached.detach()
+
+
+def test_panic_reopens_without_replacing_daemon_or_losing_current_playlist(runtime):
+    from gentle_stream import client
+
+    player = client.ensure()
+    songs = (Style(name="First", bpm=140), Style(name="Current", bpm=140))
+    player.set_playlist(songs, name="Retained", continuous=True)
+    player.next()
+    wait_for(lambda: player.spectrum(8) is not None and player.now.style == songs[1])
+    player.pause()
+    player.set_volume(.23)
+    pid = player.pid
+    player.panic()
+    assert player.pid == pid and alive(pid) and not player.playing
+    assert player.now.style == songs[1] and player.now.bar == 0
+    assert player.playlist_name == "Retained" and player.playlist_index == 1
+    assert player.continuous and player.volume == .23
+    player.next()
+    player.play()
+    wait_for(lambda: player.spectrum(8) is not None and player.now.style == songs[0])
 
 
 # ------------------------------------------------------------ ctl

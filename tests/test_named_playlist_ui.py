@@ -154,7 +154,7 @@ async def test_toolbar_clicks_keyboard_and_geometry(ui, size):
         assert p.toggle.call_count == 2 and p.next.call_count == 2
         await pilot.press("escape", "tab")
         assert isinstance(app.focused, Button)
-        (store.path.parent / f"toolbar-{size[0]}x{size[1]}.svg").write_text(app.export_screenshot())
+        (store.path.parent / f"toolbar-{size[0]}x{size[1]}.svg").write_text(app.export_screenshot(), encoding="utf-8")
         shell.interpret_with_usage.assert_not_called()
 
 
@@ -240,7 +240,7 @@ async def test_centered_transport_and_independent_side_groups(ui, size):
         left = app.query_one("#commands-left")
         center = app.query_one("#transport")
         right = app.query_one("#commands-right")
-        assert [b.id for b in left.query(Button)] == ["save-command", "continuous", "mood-command", "playlist-command"]
+        assert [b.id for b in left.query(Button)] == ["panic", "save-command", "continuous", "mood-command", "playlist-command"]
         assert [b.id for b in center.query(Button)] == ["previous", "play", "next"]
         assert [b.id for b in right.query(Button)] == ["quieter", "louder", "model-command"]
         assert abs((center.region.x * 2 + center.region.width) - (strip.x * 2 + strip.width)) <= 1
@@ -255,7 +255,7 @@ async def test_centered_transport_and_independent_side_groups(ui, size):
         assert "Select a song in Playlist" in shown(app, "#status")
         assert app.is_running
         if size[0] in (80, 120):
-            (store.path.parent / f"centered-{size[0]}.svg").write_text(app.export_screenshot())
+            (store.path.parent / f"centered-{size[0]}.svg").write_text(app.export_screenshot(), encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -572,7 +572,7 @@ async def test_default_playlist_songs_have_one_visual_gap_without_changing_selec
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method,key,button", [("toggle", "space", "play"), ("next", "n", "next"),
-                                             ("set_volume", "minus", "quieter")])
+                                             ("set_volume", "minus", "quieter"), ("panic", "f4", "panic")])
 @pytest.mark.parametrize("via", ["keyboard", "click"])
 async def test_transport_rejections_stay_actionable_without_crashing(ui, method, key, button, via):
     app, p, shell, store, library = ui
@@ -589,6 +589,108 @@ async def test_transport_rejections_stay_actionable_without_crashing(ui, method,
         assert app.is_running and p.playing and p.volume == .8
         p.close.assert_not_called()
         shell.interpret_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(180, 50), (140, 40), (80, 24)])
+async def test_panic_button_shortcut_and_reopen_error_are_honest(ui, size):
+    app, p, shell, store, library = ui
+    async with app.run_test(size=size) as pilot:
+        panic = app.query_one("#panic", Button)
+        assert str(panic.label) == "Panic" and "F4" in str(panic.tooltip)
+        assert app.query_one("#commands-left").region.contains_region(panic.region)
+        assert await pilot.click("#panic")
+        p.panic.assert_called_once()
+        assert "Current track restarted" in shown(app, "#status")
+        await pilot.press("slash", "f4")  # available even while the mood input owns focus
+        assert p.panic.call_count == 2 and app.query_one("#mood", Input).value == ""
+        def fail():
+            p.playing = False
+            raise PlayerError("Panic restart failed: device [busy]")
+        p.panic.side_effect = fail
+        await pilot.press("f4")
+        assert "device [busy]" in shown(app, "#status")
+        assert "Paused" in shown(app, "#state") and app.is_running
+        assert str(app.query_one("#play", Button).label) == "▶"
+        assert not store.path.exists() and not library.path.exists()
+        shell.interpret_with_usage.assert_not_called()
+        shell.list_models.assert_not_called()
+        p.next.assert_not_called()
+        p.set_style.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_late_mood_application_cannot_cross_panic(ui, monkeypatch):
+    import asyncio
+    import threading
+
+    app, p, shell, store, library = ui
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    ui_thread = threading.get_ident()
+    late = Style(name="Late cancelled mood")
+    shell.interpret_with_usage.return_value = (late, None)
+    p.style = DEFAULT
+    p.continuous = True
+    selection = ([DEFAULT], 0, "Retained")
+    app._selection = selection
+    def gate():
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5), "application gate was not released"
+    def apply(style):
+        if threading.get_ident() != ui_thread:
+            gate()  # old worker has passed its cancellation check but not applied
+        p.style = style
+        p.continuous = False
+    p.set_style.side_effect = apply
+    dispatch = app.call_from_thread
+    def gated_dispatch(callback, *args, **kwargs):
+        if callback.__name__ in ("_interpreted", "_apply_interpretation"):
+            gate()  # corrected worker has queued its atomic UI-thread application
+            try:
+                return dispatch(callback, *args, **kwargs)
+            finally:
+                finished.set()
+        return dispatch(callback, *args, **kwargs)
+    monkeypatch.setattr(app, "call_from_thread", gated_dispatch)
+    async with app.run_test() as pilot:
+        await pilot.press("slash")
+        app.query_one("#mood", Input).value = "a different mood"
+        await pilot.press("enter")
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            await pilot.press("f4")
+            p.panic.assert_called_once()
+            assert "Current track restarted" in shown(app, "#status")
+        finally:
+            release.set()
+        assert await asyncio.to_thread(finished.wait, 3)
+        await pilot.pause()
+        assert p.style == DEFAULT and p.continuous is True
+        assert p.volume == .8 and p.playing and p.now.style == DEFAULT
+        assert app._selection == selection and app.session_usage is None
+        assert "Current track restarted" in shown(app, "#status")
+        p.set_style.assert_not_called()
+        shell.interpret_with_usage.assert_called_once()
+        assert not store.path.exists() and not library.path.exists()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_mood_still_applies_and_reports_failures(ui):
+    app, p, shell, store, library = ui
+    shell.interpret_with_usage.return_value = (Style(name="Fresh mood"), None)
+    async with app.run_test() as pilot:
+        for rejected in (False, True):
+            p.set_style.side_effect = PlayerError("style unavailable") if rejected else None
+            await pilot.press("slash")
+            app.query_one("#mood", Input).value = "fresh"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert ("Could not apply style" if rejected else "Fresh mood") in shown(app, "#status")
+        assert p.set_style.call_count == 2 and shell.interpret_with_usage.call_count == 2
+        p.panic.assert_not_called()
+        assert not store.path.exists() and not library.path.exists()
 
 
 @pytest.mark.asyncio
@@ -692,7 +794,8 @@ async def test_previous_click_ordinary_picker_real_audio_and_pause(ui, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_previous_old_daemon_error_visible_ui_alive(ui):
+@pytest.mark.parametrize("command", ["previous", "panic"])
+async def test_navigation_old_daemon_error_visible_ui_alive(ui, command):
     import json
     from gentle_stream.client import PlayerClient
     from tests.test_continuous_playback import LocalConnection, engine
@@ -703,8 +806,8 @@ async def test_previous_old_daemon_error_visible_ui_alive(ui):
     p.set_playlist((DEFAULT,), name="Old")
     class OldConnection(LocalConnection):
         def send_bytes(self, raw):
-            if json.loads(raw)["cmd"] == "previous":
-                self.answer = {"ok": False, "error": "bad request: unknown command 'previous'"}
+            if json.loads(raw)["cmd"] == command:
+                self.answer = {"ok": False, "error": f"bad request: unknown command '{command}'"}
             else:
                 super().send_bytes(raw)
     client = PlayerClient(OldConnection(p))
@@ -712,9 +815,9 @@ async def test_previous_old_daemon_error_visible_ui_alive(ui):
     app.player = client
     async with app.run_test() as pilot:
         before = p.playback_state()
-        await pilot.click("#previous")
+        await pilot.click(f"#{command}")
         await pilot.pause()
-        assert "unknown command 'previous'" in shown(app, "#status")
+        assert f"unknown command '{command}'" in shown(app, "#status")
         assert app.is_running and p.playback_state() == before
         await pilot.press("escape", "space")
         assert not p.playing

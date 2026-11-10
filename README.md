@@ -191,7 +191,7 @@ The compact clickable command strip sits between the spectrum panel and mood inp
 Tab focuses its buttons; tooltips show full action labels and shortcuts. The model button
 shows the chosen model (or Gentle Shell default), with long IDs elided safely. On narrow
 terminals, focus/scroll each side group independently. **💾 save, ↻ off/on, ✎ mood, ☷ playlists**
-stay left; **⏮ Previous, ⏸ / ▶ play/pause, ⏭ Next** stay centered in the full strip;
+stay left, alongside **Panic**; **⏮ Previous, ⏸ / ▶ play/pause, ⏭ Next** stay centered in the full strip;
 **⚙ chosen model, − / + volume** stay right. **⏮** returns to the previous playlist song
 in displayed order, wrapping at the first song, with repeat on or off. Pause and volume are
 preserved. Select a song in Playlist first; Previous is not a current-song restart and adds
@@ -201,6 +201,7 @@ no keyboard shortcut. Older-daemon rejections remain visible without closing the
 | :--- | :--- |
 | `space` | Play / pause; sounddevice fades smoothly, while Windows cuts the owned output to discard buffered audio (a hard cut may click) |
 | `n` | Next piece with the same mood, or next song when continuous playback is on |
+| `F4` / **Panic** | Hard cut, reopen output and restart the audible current track from the beginning; same musical settings, playlist, pause and volume, no AI call |
 | `/` | Describe a mood; `Enter` sends it, `Esc` leaves the input |
 | `F2` / gear | Settings: appearance and explicit mood model access; always available |
 | `m` | Directly choose the model Gentle Shell uses (listed from `gentle-shell -- --list-models`); `Enter` picks, `Esc` keeps the current one |
@@ -211,6 +212,14 @@ no keyboard shortcut. Older-daemon rejections remain visible without closing the
 | `↑` / `↓` | Volume up / down by 1% |
 | `b` | Back: leave the app and keep the music playing in the background |
 | `q` | Quit and stop the music (a running `gentle-shell` call is cancelled) |
+
+**Panic** discards queued audio and DSP tails rather than fading or selecting another song.
+It reuses the current track's composition seed and resident voice, preserving instrument mutes
+and playlist position even when rendering has looked ahead. F4 works while typing a mood
+or when controls are hidden; a pending mood interpretation is cancelled. The cut may click.
+Reopen failures appear in the status line and playback is shown as paused; retry Panic, then
+resume if needed. Older daemons reject the operation visibly. This is a recovery attempt,
+not a guaranteed fix for every cause of stutter, and it does not restart Gentle Shell.
 
 ### Flags
 
@@ -255,7 +264,7 @@ If audio cuts out, run `gentle-stream ctl status` again and compare the readings
 | `output_underflows` | Callbacks reporting a host/PortAudio output underflow, even if the application queue was full or playback was paused |
 | `buffered_seconds` | Audio currently queued in the application, in seconds (not the device buffer or total output latency) |
 
-Both counters are cumulative since the current background player (daemon) started; pause, next and reconnect do not reset them. The queue reading is a changing snapshot, not necessarily the queue depth when a glitch occurred. These metrics help distinguish application starvation from host output trouble, but do **not** prove a root cause or detect every audible artifact. They do not change the sound or buffer settings.
+Both counters are cumulative since the current background player (daemon) started; pause, next, Panic and reconnect do not reset them. The queue reading is a changing snapshot, not necessarily the queue depth when a glitch occurred. These metrics help distinguish application starvation from host output trouble, but do **not** prove a root cause or detect every audible artifact. They do not change the sound or buffer settings.
 
 An older running daemon cannot supply these fields: the updated client reports them as JSON `null` (unknown, not zero). They become available after that daemon is stopped and a new one starts. When no player is running, status remains just `{"running": false}`.
 
@@ -277,7 +286,7 @@ model: claude-bridge/claude-haiku-5-5 · session: 35.4k tokens · $0.0015
 | Action | Calls a model? |
 | :--- | :--- |
 | Describing a mood (`/` or `--mood`) | **Yes** — the only thing that does |
-| Playback, `space`, `n`, volume | No |
+| Playback, `space`, `n`, Panic (`F4`), volume | No |
 | Saving (`s`) or applying (`p`) a prompt | No |
 | Failed or cancelled requests | Add nothing to the total |
 

@@ -57,6 +57,15 @@ these settings do not claim to reproduce or analyze a particular recording.
   backends reuse their keys/synth voices and drum kit; trap's tuned 808 bass is
   synthesized on both backends. No speech, singing or recordings are added.
 
+## Playback recovery
+
+Click **Panic** or press **F4** to cut output abruptly, reopen it and restart the audible
+current track from its beginning. Its musical settings (including muted lead/drums),
+playlist position, repeat mode, pause and volume remain; no model or speech synthesis
+call is made. This discards queued audio and effects tails, not a next-song selection.
+A cut may click. Failed reopening is reported and leaves playback paused; retry Panic
+then resume if needed. Recovery is not proof that every cause of stutter is fixed.
+
 ## Verification
 
 `tests/test_instrumental_beats.py` exercises registry discovery, model hints with a

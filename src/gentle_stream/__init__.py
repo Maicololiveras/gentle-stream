@@ -8,6 +8,9 @@ import sys
 CONTROLS = """controls:
   space    play / pause
   n        next piece with the same mood (next song during continuous playback)
+  F4       Panic: immediately cut output, reopen it and restart the current track from the beginning
+           keeps musical settings, playlist, pause and volume; no AI call. A hard cut may click.
+           recovery does not guarantee to fix stutter; reopen failures are shown, not Playing.
   /        describe a mood (feeling, concept, place...), Enter to send, Esc to leave
   F2       Settings: live appearance, visibility, and explicit mood model selection
            always available, even with hidden controls/input/footer; also in the command palette
@@ -19,7 +22,7 @@ CONTROLS = """controls:
            click or Enter applies; d deletes only saved songs; Esc closes
   c        continuous playlist from the selected song; toggle off without restarting audio
            picker: c or Repeat from selection starts the full list at the highlighted song
-  command strip: save/repeat/mood/playlists left; previous/play-pause/next centered;
+  command strip: Panic/save/repeat/mood/playlists left; previous/play-pause/next centered;
                  chosen model and volume right. Tab focuses buttons; side groups scroll independently.
   ⏮ button: previous playlist song (wraps), repeat on or off; preserves pause and volume.
             Select a song in Playlist first. No new key; this does not restart the current song.

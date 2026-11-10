@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -50,6 +50,17 @@ class _Playlist:
     continuous: bool
 
 
+@dataclass(frozen=True)
+class Track:
+    """Resident restart state for a rendered track, retained with audible metadata."""
+    style: Style
+    clips: tuple[np.ndarray, ...]
+    seed: int
+    piece: int
+    playlist: _Playlist | None
+    index: int | None
+
+
 # ---------------------------------------------------------------- engine
 class Engine:
     HEADROOM = 24.0  # seconds of scheduling buffer: longest bar plus the longest note tail
@@ -62,7 +73,7 @@ class Engine:
         sf2 = _samples.soundfont_path() if samples is True else (Path(samples) if samples else None)
         renderer = _samples.load_renderer(sf2, sr) if sf2 is not None else None
         self._sampled = _samples.SampleInstruments(renderer, np.random.default_rng(0), sr) if renderer else None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._playlist: _Playlist | None = None
         self.playlist_name: str | None = None
         self.playlist_index: int | None = None
@@ -71,9 +82,15 @@ class Engine:
         self._pending_style: tuple[Style, tuple[np.ndarray, ...]] | None = None
         self._pending_next = False
         self._root_rng = np.random.default_rng(seed)
+        self.piece = 0
+        self._reset_audio()
+        self._start_piece(style, self._load_voice(style))
+
+    def _reset_audio(self) -> None:
+        """Fresh scheduling and DSP history, without replacing resident instruments/caches."""
+        sr = self.sr
         self._acc = np.zeros((int(self.HEADROOM * sr), 2))
         self.samples_out = 0
-        self.piece = 0
         # master chain state
         self._room_taps = ((.031, .28), (.057, .24), (.083, .2), (.127, .17), (.191, .13), (.263, .1), (.347, .07))
         self._room_hist = np.zeros((int(0.36 * sr), 2))
@@ -88,7 +105,6 @@ class Engine:
         self._reverb: ConvolutionReverb | None = None
         self._comp = Compressor(sr)
         self._last: dict[str, float] = {}   # master gains of the previous bar (see `_glide`)
-        self._start_piece(style, self._load_voice(style))
 
     def _load_voice(self, style: Style) -> tuple[np.ndarray, ...]:
         if not style.voice_lines:
@@ -158,7 +174,9 @@ class Engine:
 
     def queue_style(self, style: Style) -> None:
         """Validate/load voice on the caller before queuing; failure leaves playback untouched."""
-        clips = self._load_voice(style)
+        self._queue_style(style, self._load_voice(style))
+
+    def _queue_style(self, style: Style, clips: tuple[np.ndarray, ...]) -> None:
         with self._lock:
             self._playlist = None
             self.playlist_name = self.playlist_index = None
@@ -182,6 +200,19 @@ class Engine:
             index = self.playlist_index if from_index is None else from_index
             self._select_playlist((index - 1) % len(self._playlist.songs))
 
+    def restart(self, track: Track) -> None:
+        """Rewind the audible track, not producer lookahead; never load/generate anything."""
+        with self._lock:
+            if track.playlist is not None:
+                self._apply_playlist(replace(track.playlist, start_index=track.index,
+                                             continuous=self.continuous))
+            else:
+                self._queue_style(track.style, track.clips)
+            self._pending_style, self._pending_next = None, False
+            self._reset_audio()
+            self.piece = track.piece - 1
+            self._start_piece(track.style, track.clips, seed=track.seed)
+
     @property
     def backend(self) -> str:
         return "procedural" if self._sampled is None else "samples"
@@ -191,7 +222,7 @@ class Engine:
         return 240.0 / self.style.bpm
 
     # ------------------------------------------------------------ piece setup
-    def _start_piece(self, style: Style, clips: tuple[np.ndarray, ...]) -> None:
+    def _start_piece(self, style: Style, clips: tuple[np.ndarray, ...], seed: int | None = None) -> None:
         self._voice_clips = clips
         n = int(round(240.0 / style.bpm * self.sr))
         end = sum(bars for _, bars in FIRST_FORM) * n
@@ -199,7 +230,7 @@ class Engine:
                                  for position, clip in zip(voice.CUE_POSITIONS, clips))
         self.style = style
         self.genre = genres.get(style.genre)
-        self.seed = int(self._root_rng.integers(2 ** 31))
+        self.seed = int(self._root_rng.integers(2 ** 31)) if seed is None else seed
         self.rng = np.random.default_rng(self.seed)
         self.inst = self.genre.instruments(self.rng, self.sr, self._sampled)
         self.piece += 1
@@ -210,6 +241,7 @@ class Engine:
         self.section = self.composer.plan(0).section
         self._piece = Piece(style, self.rng, self.inst, self.ton, self.sr, self._acc)
         self.genre.start(self._piece)
+        self.track = Track(style, clips, self.seed, self.piece, self._playlist, self.playlist_index)
 
     # ------------------------------------------------------------ rendering
     def render_bar(self) -> np.ndarray:

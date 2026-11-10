@@ -10,11 +10,11 @@ import threading
 import time
 from collections.abc import Sequence
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
-from .engine import SR, Engine
+from .engine import SR, Engine, Track
 from .style import Style
 
 RAMP_SECONDS = 0.03
@@ -35,6 +35,7 @@ class NowPlaying:
     playlist_name: str | None = None
     playlist_index: int | None = None
     playlist_revision: int | None = None
+    track: Track | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass
@@ -71,6 +72,9 @@ class Player:
         self._producer = threading.Thread(target=self._produce, name="gentle-stream-producer", daemon=True)
         self._stream = None
         self._control_lock = threading.RLock()  # Stream hooks run here, never in the callback.
+        self._callback_lock = threading.Lock()  # Retire a callback before replacing its queue/state.
+        self._generation = 0
+        self._restart_error: str | None = None
         self.playing = True
         self.volume = float(np.clip(volume, 0, 1))
         self._gain = 0.0
@@ -81,29 +85,49 @@ class Player:
         self._tail = np.zeros(SPECTRUM_SIZE, dtype=np.float32)
         self._window = np.hanning(SPECTRUM_SIZE).astype(np.float32)
         self._shown = np.zeros(0)        # last spectrum() result, for the gentle fall
-        self.now = NowPlaying(engine.style, engine.piece, 0)
+        self.now = NowPlaying(engine.style, engine.piece, 0, track=getattr(engine, 'track', None))
         self._explicit_piece = 0
         self._explicit_index: int | None = None
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> None:
         """Open the output stream and start rendering; calling it again is a no-op."""
-        if self._stream is not None:
-            return
-        self._stream = self._factory(samplerate=self.engine.sr, channels=2, dtype="float32",
-                                     blocksize=self._blocksize, latency="high", callback=self._callback)
-        if not getattr(self._stream, 'reports_output_underflows', True):
-            self.output_underflows = None
-        self._producer.start()
-        deadline = time.monotonic() + 5
-        while self._buffered == 0 and self._producer.is_alive() and time.monotonic() < deadline:
-            time.sleep(0.005)    # the first bar is ready before the device starts pulling
-        self._stream.start()
-        if not self.playing and callable(getattr(self._stream, 'pause', None)):
-            self._stream.pause()
+        with self._control_lock:
+            if self._stopping.is_set():
+                raise ValueError("player is closed")
+            if self._stream is not None:
+                return
+            generation = self._generation
+            callback = lambda *args: self._callback(*args, generation=generation)
+            try:
+                self._stream = self._factory(samplerate=self.engine.sr, channels=2, dtype="float32",
+                                             blocksize=self._blocksize, latency="high", callback=callback)
+                if not getattr(self._stream, 'reports_output_underflows', True):
+                    self.output_underflows = None
+                if self._producer.ident is None:
+                    self._producer.start()
+                deadline = time.monotonic() + 5
+                while self._buffered == 0 and self._producer.is_alive() and time.monotonic() < deadline:
+                    time.sleep(0.005)    # the first bar is ready before the device starts pulling
+                self._stream.start()
+                if not self.playing and callable(getattr(self._stream, 'pause', None)):
+                    self._stream.pause()
+                self._restart_error = None
+            except Exception:
+                self.playing = False
+                with self._callback_lock:
+                    self._generation += 1
+                if self._stream is not None:
+                    try:
+                        self._stream.close()
+                    finally:
+                        self._stream = None
+                raise
 
     def close(self) -> None:
         with self._control_lock:
+            with self._callback_lock:
+                self._generation += 1
             self._stopping.set()
             self._wake.set()
             if self._stream is not None:
@@ -113,8 +137,48 @@ class Player:
                 self._producer.join(timeout=5)
 
     # ------------------------------------------------------------ controls
+    def panic(self) -> None:
+        """Hard cut, discard pending PCM/DSP, reopen and rewind the same audible track."""
+        with self._control_lock:
+            if self._stopping.is_set():
+                raise ValueError("player is closed")
+            playing = self.playing
+            with self._callback_lock:
+                self._generation += 1
+                now = self.now
+            self.playing = False
+            try:
+                if self._stream is not None:
+                    # PortAudio aborts without draining. Windows pause confirms the
+                    # owned sink cut; close then retires its supervisor as usual.
+                    cut = getattr(self._stream, 'abort', None) or getattr(self._stream, 'pause', None)
+                    if not callable(cut):
+                        raise ValueError("audio output does not support an immediate cut")
+                    cut()
+                    self._stream.close()
+                    self._stream = None
+                with self._render_lock:
+                    self.engine.restart(now.track)
+                    with self._lock:
+                        self._chunks.clear()
+                        self._offset = self._buffered = self.position = 0
+                        self._gain = self.level = 0.0
+                        self._tail[:] = 0
+                        self._shown = np.zeros(0)
+                        self.now = replace(self._metadata(), bar=0)
+                        self._explicit_index = self.playlist_index
+                        self._explicit_piece = self.engine.piece
+                self.playing = playing
+                self.start()  # Reuse the live producer, never restart a one-shot Thread.
+            except Exception as error:
+                self.playing = False
+                self._restart_error = f"Panic restart failed: {error}"
+                raise ValueError(self._restart_error) from error
+
     def play(self) -> None:
         with self._control_lock:
+            if self._restart_error:
+                raise ValueError(self._restart_error + "; use Panic to retry")
             resume = getattr(self._stream, 'resume', None)
             self.playing = True
             if callable(resume):
@@ -141,11 +205,13 @@ class Player:
             self.pause() if self.playing else self.play()
 
     def set_volume(self, volume: float) -> None:
-        self.volume = float(np.clip(volume, 0, 1))
+        with self._control_lock:
+            self.volume = float(np.clip(volume, 0, 1))
 
     def set_style(self, style: Style) -> None:
         """The new style starts at the next rendered bar, after the audio already buffered."""
-        # Cache preparation must not hold the queue lock used by the audio callback.
+        # Render controls serialize engine/selection changes, not transport hooks.
+        # Never hold _control_lock while waiting for a render: Panic must cut first.
         with self._render_lock:
             self.engine.queue_style(style)
             self._explicit_index = None
@@ -153,8 +219,8 @@ class Player:
     def set_playlist(self, styles: Sequence[Style], start_index: int = 0, name: str = "",
                      continuous: bool = False) -> None:
         """Atomically queue prepared snapshots from the selected song; preserve play/pause."""
-        prepared = self.engine.prepare_playlist(styles, start_index, name, continuous)
         with self._render_lock:
+            prepared = self.engine.prepare_playlist(styles, start_index, name, continuous)
             self.engine._apply_playlist(prepared)
             self._explicit_index = start_index
             self._explicit_piece = self.engine.piece + 1
@@ -182,7 +248,7 @@ class Player:
     def _metadata(self) -> NowPlaying:
         return NowPlaying(self.engine.style, self.engine.piece, self.engine.bar - 1,
                           self.playlist_name, self.playlist_index,
-                          getattr(self.engine, "playlist_revision", None))
+                          getattr(self.engine, "playlist_revision", None), getattr(self.engine, 'track', None))
 
     def next(self) -> None:
         """Advance once in continuous mode, otherwise vary the same mood. Render the
@@ -200,7 +266,7 @@ class Player:
 
     def _navigate(self, previous: bool = False, styles: Sequence[Style] | None = None,
                   start_index: int = 0, name: str = "") -> None:
-        with self._render_lock:  # waits for a bar being rendered, so no old bar can be queued after this
+        with self._render_lock:  # no old bar can be queued after this
             if previous and self.playlist_index is None and styles is not None:
                 prepared = self.engine.prepare_playlist(styles, start_index, name, continuous=False)
                 self.engine._apply_playlist(prepared)
@@ -257,7 +323,7 @@ class Player:
 
     @property
     def audio_output_error(self):
-        return getattr(self._stream, 'error', None)
+        return self._restart_error or getattr(self._stream, 'error', None)
 
     @property
     def buffered_seconds(self) -> float:
@@ -269,7 +335,7 @@ class Player:
         return self.engine.style
 
     def playback_state(self) -> dict:
-        """Consistent control/render snapshot; consumed metadata is read under the queue lock."""
+        """Consistent render snapshot; never obstruct the transport's immediate cut."""
         with self._render_lock:
             with self._lock:
                 now = self.now
@@ -318,6 +384,8 @@ class Player:
         while not self._stopping.is_set():
             if self._buffered < self._prebuffer:
                 with self._render_lock:
+                    if self._stopping.is_set():
+                        return
                     audio = self.engine.render_bar()
                     meta = self._metadata()
                     with self._lock:
@@ -347,7 +415,14 @@ class Player:
         self.position += frames
         return out
 
-    def _callback(self, outdata, frames, time_info, status) -> None:
+    def _callback(self, outdata, frames, time_info, status, generation=None) -> None:
+        with self._callback_lock:
+            if generation is not None and generation != self._generation:
+                outdata[:] = 0
+                return
+            self._render_callback(outdata, frames, time_info, status)
+
+    def _render_callback(self, outdata, frames, time_info, status) -> None:
         if self.output_underflows is not None and getattr(status, "output_underflow", False):
             self.output_underflows += 1
         target = self.volume if self.playing else 0.0

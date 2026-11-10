@@ -72,6 +72,54 @@ def test_cli_attach_singleton_auth_and_stop(runtime, capsys):
     assert run_ctl(capsys, "status") == (0, '{"running": false}\n', "")
 
 
+def offline_audio(**kwargs):
+    """Fail visibly if any model launch is attempted by the isolated fake daemon."""
+    from gentle_stream.bridge import GentleShell
+    from tests.test_daemon import FakeAudio
+
+    def forbidden(*args, **kw):
+        Path(os.environ["GENTLE_STREAM_TEST_MODEL_MARKER"]).write_text("unexpected model call")
+        raise AssertionError("Panic must not call a model")
+
+    GentleShell._run = forbidden
+    return FakeAudio(**kwargs)
+
+
+def test_public_ipc_panic_preserves_native_session(runtime, monkeypatch, capsys):
+    from gentle_stream import client
+    from gentle_stream.style import Style
+
+    marker = runtime.parent / "model-called"
+    monkeypatch.setenv("GENTLE_STREAM_TEST_MODEL_MARKER", str(marker))
+    monkeypatch.setenv("GENTLE_STREAM_AUDIO_FACTORY", "tests.test_native_windows:offline_audio")
+    player = client.ensure(timeout=15)
+    songs = (Style(name="First", bpm=140),
+             Style(name="Retained", bpm=140, lead="none", drums="none"))
+    player.set_playlist(songs, start_index=1, name="Recovery", continuous=True)
+    wait_for(lambda: player.spectrum(8) is not None and player.now.style == songs[1])
+    player.pause()
+    player.set_volume(.23)
+    before = player.request("state")
+    player.panic()
+    after = player.request("state")
+    assert player.pid == before["pid"] and not player.playing and player.volume == .23
+    assert player.now.style == songs[1] and player.now.bar == 0
+    assert player.now.piece == before["now"]["piece"]
+    assert player.continuous and player.playlist_name == "Recovery" and player.playlist_index == 1
+    for name in ("pid", "playing", "volume", "underruns", "output_underflows"):
+        assert after[name] == before[name]
+    player.detach()
+    attached = client.connect()
+    assert attached.pid == before["pid"] and attached.now.style == songs[1]
+    assert not attached.playing and attached.volume == .23
+    attached.next()
+    attached.play()
+    wait_for(lambda: attached.spectrum(8) is not None and attached.now.style == songs[0])
+    attached.close()
+    assert not marker.exists()
+    assert capsys.readouterr() == ("", "")
+
+
 def _no_player(client):
     try:
         player = client.connect()

@@ -423,6 +423,7 @@ class StreamApp(App):
     """
     BINDINGS = [
         Binding("f2", "settings", "Settings", priority=True),
+        Binding("f4", "panic", "Panic restart", priority=True),
         Binding("space", "toggle", "Play/Pause"),
         Binding("n", "next", "Next"),
         Binding("slash", "focus_mood", "Mood"),
@@ -470,6 +471,7 @@ class StreamApp(App):
             yield Static("Press / to describe a mood.", id="status")
         with Horizontal(id="commands"):
             with HorizontalScroll(id="commands-left"):
+                yield Button("Panic", id="panic", tooltip="Hard cut and restart current track (F4); no AI call")
                 yield Button("💾", id="save-command", tooltip="Save audible song (s)")
                 yield Button("↻ off", id="continuous", tooltip="Continuous playlist from selection (c)")
                 yield Button("✎", id="mood-command", tooltip="Describe a mood (/); Enter sends, Esc leaves")
@@ -494,7 +496,7 @@ class StreamApp(App):
         self._buttons = {b.id: b for b in self.query("#commands Button")}
         # Textual ignores mouse and Enter presses while a button's active-effect
         # class persists; transport commands must accept consecutive presses.
-        for name in ("previous", "play", "next"):
+        for name in ("previous", "play", "next", "panic"):
             self._buttons[name].active_effect_duration = 0
         self._root = self.screen
         self._mood_input = self.query_one('#mood', Input)
@@ -613,6 +615,7 @@ class StreamApp(App):
         from textual.app import SystemCommand
         yield from super().get_system_commands(screen)
         yield SystemCommand('Settings', 'Appearance and mood model (F2)', self.action_settings)
+        yield SystemCommand('Panic restart', 'Hard cut and restart current track, no AI (F4)', self.action_panic)
 
     # ------------------------------------------------------------ actions
     def action_back(self) -> None:
@@ -624,10 +627,16 @@ class StreamApp(App):
         try:
             action()
         except (ValueError, PlayerError) as e:
+            self._tick()  # A failed reopen may have stopped playback; never leave a stale Playing label.
             self._status(f"Could not control playback: {escape(str(e))}")
             return False
         self._tick()
         return True
+
+    def action_panic(self) -> None:
+        self.workers.cancel_group(self, "interpret")
+        if self._control(self.player.panic):
+            self._status("Current track restarted from the beginning · same settings · no AI call.")
 
     def action_toggle(self) -> None:
         self._control(self.player.toggle)
@@ -679,7 +688,7 @@ class StreamApp(App):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         actions = {"playlist": self.action_pick_preset, "play": self.action_toggle,
-                   "next": self.action_next, "previous": self.action_previous,
+                   "next": self.action_next, "previous": self.action_previous, "panic": self.action_panic,
                    "mood-command": self.action_focus_mood,
                    "model-command": self.action_settings, "save-command": self.action_save_preset,
                    "playlist-command": self.action_pick_preset, "continuous": self.action_continuous,
@@ -758,15 +767,19 @@ class StreamApp(App):
             if not worker.is_cancelled:
                 self.call_from_thread(self._status, f"[$error]Could not interpret the mood:[/] {escape(str(e))}")
             return
+        self.call_from_thread(self._apply_interpretation, worker, style, usage)
+
+    def _apply_interpretation(self, worker, style: Style, usage: Usage | None) -> None:
+        # UI actions (including Panic's cancellation) and application share one
+        # event-loop turn. A worker cannot pass a check then apply after Panic.
         if worker.is_cancelled:
             return
         try:
             self.player.set_style(style)
         except (ValueError, PlayerError) as e:
-            if not worker.is_cancelled:
-                self.call_from_thread(self._status, f"[$error]Could not apply style:[/] {escape(str(e))}")
+            self._status(f"[$error]Could not apply style:[/] {escape(str(e))}")
             return
-        self.call_from_thread(self._interpreted, style, usage)
+        self._interpreted(style, usage)
 
     def _interpreted(self, style: Style, usage: Usage | None) -> None:
         self._selection = None  # an ordinary mood exits playlist navigation as well as rotation

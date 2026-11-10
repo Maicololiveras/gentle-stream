@@ -28,6 +28,15 @@ uv run python -m gentle_stream ctl stop
 
 Stop only a session you intend to end. These commands never stop another audio app.
 
+For recovery without replacing the daemon, click **Panic** or press **F4** in the TUI
+(also available in the command palette). It hard-cuts and reopens the native output,
+restarting the audible current track from its beginning with the same seed, musical
+settings, playlist, pause and volume; no model call is made. Ordinary native pause
+still fades. Panic may click and is not a guaranteed fix for stutter. Reopen failures
+are shown as paused with an error; retry Panic, then resume if needed. An older daemon
+rejects Panic visibly; stop and start it to load the new code. The CLI `ctl` actions
+are unchanged; Panic is exposed through the TUI and `PlayerClient.panic()`.
+
 ## Mood interpretation
 
 Configure Gentle Shell and its provider separately. A native `.exe` launcher works
