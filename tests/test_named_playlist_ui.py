@@ -1,4 +1,5 @@
 """Public Textual flows; no audio devices, generators, or live player."""
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -27,6 +28,13 @@ def ui(tmp_path, monkeypatch):
     player.set_volume.side_effect = lambda value: setattr(player, "volume", value)
     player.toggle.side_effect = lambda: setattr(player, "playing", not player.playing)
     player.set_continuous.side_effect = lambda value: setattr(player, "continuous", value)
+    @contextmanager
+    def stage(style):
+        def commit():
+            player.set_style(style)
+            return True
+        yield commit
+    player.stage_style.side_effect = stage
     shell = Mock(model=None)
     shell.list_models.return_value = ["provider/chosen-model"]
     app = StreamApp(player, shell, presets=store)
@@ -691,6 +699,90 @@ async def test_ordinary_mood_still_applies_and_reports_failures(ui):
         assert p.set_style.call_count == 2 and shell.interpret_with_usage.call_count == 2
         p.panic.assert_not_called()
         assert not store.path.exists() and not library.path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote", [False, True])
+@pytest.mark.parametrize("key", ["f4", "q"])
+async def test_slow_preparation_keeps_input_and_polling_responsive(ui, monkeypatch, remote, key):
+    import asyncio
+    import threading
+    from multiprocessing import Pipe
+    from gentle_stream import client, daemon
+    from gentle_stream.player import Player
+    from tests.test_continuous_playback import engine
+
+    app, _, shell, store, library = ui
+    p = Player(engine(), volume=.37)
+    monkeypatch.setattr(p, "start", lambda: None)
+    threads, connections = [], []
+    def connect():
+        left, right = Pipe()
+        thread = threading.Thread(target=daemon.Server(p, None).serve, args=(right,))
+        threads.append(thread)
+        thread.start()
+        connection = client.PlayerClient(left)
+        connections.append(connection)
+        return connection
+    monkeypatch.setattr(client, "connect", connect)
+    app.player = connect() if remote else p
+    if remote:
+        app.player.close = app.player.detach  # no daemon main loop in this synthetic server
+        before = app.player.request("state")
+        for command, error in (({"cmd": "commit_style"}, "no staged style"),
+                               ({"cmd": "prepare_style", "style": []}, "style must be an object")):
+            with pytest.raises(PlayerError) as rejected:
+                app.player.request(command.pop("cmd"), **command)
+            assert str(rejected.value) == f"bad request: {error}"
+        assert app.player.request("state") == before
+        with app.player.stage_style(p.style) as commit:
+            assert commit() is True
+        with app.player.stage_style(p.style) as commit:
+            app.player.panic()
+            before = app.player.request("state")
+            assert commit() is None
+            assert app.player.request("state") == before
+    entered, release = threading.Event(), threading.Event()
+    late = Style(name="Obsolete prepared mood")
+    shell.interpret_with_usage.return_value = (late, None)
+    load = p.engine._load_voice
+    def slow(style):
+        entered.set()
+        assert release.wait(5)
+        return load(style)
+    monkeypatch.setattr(p.engine, "_load_voice", slow)
+    watchdog = threading.Timer(3, release.set)
+    watchdog.start()
+    try:
+        async with app.run_test() as pilot:
+            await pilot.press("slash")
+            app.query_one("#mood", Input).value = "new mood"
+            await pilot.press("enter")
+            assert await asyncio.to_thread(entered.wait, 2)
+            app.player.spectrum(8)  # actual UI polling connection remains available
+            await asyncio.wait_for(pilot.press(key), 1)
+            assert not release.is_set(), "input waited for preparation"
+            if key == "f4":
+                assert "Current track restarted" in shown(app, "#status")
+            else:
+                assert not app.is_running
+            release.set()
+            await pilot.pause()
+        for connection in connections:
+            connection.detach()
+        p.next()  # public render control exposes any stale pending mood
+        assert p.style.name != late.name and p.volume == .37
+        assert app.session_usage is None and not store.path.exists() and not library.path.exists()
+    finally:
+        release.set()
+        watchdog.cancel()
+        watchdog.join()
+        for connection in connections:
+            connection.detach()
+        for thread in threads:
+            await asyncio.to_thread(thread.join, 3)
+            assert not thread.is_alive()
+        p.close()
 
 
 @pytest.mark.asyncio

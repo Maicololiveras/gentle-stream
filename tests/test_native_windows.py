@@ -179,6 +179,8 @@ def test_rejected_json_leaves_paused_state_unchanged(runtime, capsys):
     player.pause()
     before = player.request("state")
     for raw, error in ((b"not JSON", "bad request: not JSON"),
+                       (b"\x80\x04N.", "bad request: not JSON"),
+                       (b"\xff", "bad request: not JSON"),
                        (b"[]", "bad request: 'cmd'"),
                        (b'{"cmd":"set_volume","volume":"bad"}',
                         "bad request: could not convert string to float: 'bad'")):

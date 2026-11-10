@@ -258,6 +258,19 @@ def test_render_controls_and_snapshot_preserve_transport(session):
     assert p.playlist_name is None and not p.continuous
 
 
+def test_staged_style_cannot_commit_across_busy_render_or_panic(session):
+    p, _ = session
+    with p.stage_style(SONGS[0]) as commit:
+        with p._render_lock:
+            assert commit() is False
+        p.panic()
+        before = p.playback_state()
+        counters = (p.position, p.underruns, p.output_underflows)
+        assert commit() is None
+        assert p.playback_state() == before
+        assert (p.position, p.underruns, p.output_underflows) == counters
+
+
 def test_existing_shared_controls_keep_their_behavior(session):
     p, streams = session
     p.start()  # idempotent, not another producer/output

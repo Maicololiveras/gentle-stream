@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
+from contextlib import contextmanager
 from multiprocessing.connection import AuthenticationError, Client
 
 import numpy as np
@@ -265,6 +266,16 @@ class PlayerClient:
 
     def set_volume(self, volume: float) -> None:
         self._control("set_volume", volume=float(volume))
+
+    @contextmanager
+    def stage_style(self, style: Style):
+        """Use a private connection so preparation never owns the UI's IPC lock."""
+        staged = connect()
+        try:
+            staged.request("prepare_style", style=style.to_dict())
+            yield lambda: staged.request("commit_style")["committed"]
+        finally:
+            staged.detach()
 
     def set_style(self, style: Style) -> None:
         self._control("set_style", style=style.to_dict())

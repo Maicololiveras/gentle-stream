@@ -10,6 +10,7 @@ be saved under a name and applied later, instantly, without asking Gentle Shell 
 from __future__ import annotations
 
 from collections.abc import Callable
+import time
 
 from rich.text import Text
 from textual import events, work
@@ -767,19 +768,29 @@ class StreamApp(App):
             if not worker.is_cancelled:
                 self.call_from_thread(self._status, f"[$error]Could not interpret the mood:[/] {escape(str(e))}")
             return
-        self.call_from_thread(self._apply_interpretation, worker, style, usage)
+        try:
+            with self.player.stage_style(style) as commit:
+                while not worker.is_cancelled:
+                    if self.call_from_thread(self._apply_interpretation, worker, style, usage, commit):
+                        break
+                    time.sleep(.01)  # retry a busy render without blocking input
+        except (ValueError, PlayerError, ConnectionError) as e:
+            if not worker.is_cancelled:
+                self.call_from_thread(self._status, f"[$error]Could not apply style:[/] {escape(str(e))}")
 
-    def _apply_interpretation(self, worker, style: Style, usage: Usage | None) -> None:
+    def _apply_interpretation(self, worker, style: Style, usage: Usage | None, commit) -> bool:
         # UI actions (including Panic's cancellation) and application share one
         # event-loop turn. A worker cannot pass a check then apply after Panic.
         if worker.is_cancelled:
-            return
+            return True
         try:
-            self.player.set_style(style)
-        except (ValueError, PlayerError) as e:
+            committed = commit()  # never waits for preparation or a render lock
+        except (ValueError, PlayerError, ConnectionError) as e:
             self._status(f"[$error]Could not apply style:[/] {escape(str(e))}")
-            return
-        self._interpreted(style, usage)
+            return True
+        if committed:
+            self._interpreted(style, usage)
+        return committed is not False
 
     def _interpreted(self, style: Style, usage: Usage | None) -> None:
         self._selection = None  # an ordinary mood exits playlist navigation as well as rotation

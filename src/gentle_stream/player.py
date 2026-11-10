@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Sequence
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -215,6 +216,32 @@ class Player:
         with self._render_lock:
             self.engine.queue_style(style)
             self._explicit_index = None
+
+    @contextmanager
+    def stage_style(self, style: Style):
+        """Prepare off-thread; yield a nonblocking commit fenced against transport restart."""
+        with self._control_lock:
+            generation = self._generation
+        prepared = self.engine.prepare_playlist((style,)).songs[0]
+
+        def commit():
+            if not self._control_lock.acquire(blocking=False):
+                return False
+            try:
+                if generation != self._generation or self._stopping.is_set():
+                    return None  # obsolete; never publish success
+                if not self._render_lock.acquire(blocking=False):
+                    return False
+                try:
+                    self.engine._queue_style(*prepared)
+                    self._explicit_index = None
+                finally:
+                    self._render_lock.release()
+            finally:
+                self._control_lock.release()
+            return True
+
+        yield commit
 
     def set_playlist(self, styles: Sequence[Style], start_index: int = 0, name: str = "",
                      continuous: bool = False) -> None:
