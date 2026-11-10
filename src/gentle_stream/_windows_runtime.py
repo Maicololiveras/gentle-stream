@@ -71,6 +71,34 @@ class SecurityAttributes(C.Structure):
 
 
 CreateDirectory = api(k32, "CreateDirectoryW", W.BOOL, W.LPCWSTR, C.POINTER(SecurityAttributes))
+CreateFile = api(k32, "CreateFileW", W.HANDLE, W.LPCWSTR, W.DWORD, W.DWORD,
+                 C.POINTER(SecurityAttributes), W.DWORD, W.DWORD, W.HANDLE)
+
+
+def create_private_file(path: Path):
+    """Exclusively create a user-owned/private file; return a noninheritable fd."""
+    import msvcrt
+    import os
+
+    no_reparse(path.parent)
+    descriptor = W.LPVOID()
+    sid = user_sid()
+    checked(ConvertSD(f"O:{sid}D:P(A;;FA;;;{sid})", 1, C.byref(descriptor), None))
+    try:
+        attrs = SecurityAttributes(C.sizeof(SecurityAttributes), descriptor, False)
+        # GENERIC_WRITE, no sharing, CREATE_NEW, FILE_ATTRIBUTE_NORMAL.
+        # The owner and protected DACL apply atomically, before any bytes exist.
+        handle = CreateFile(str(path), 0x40000000, 0, C.byref(attrs), 1, 0x80, None)
+        if handle == C.c_void_p(-1).value:
+            raise C.WinError(C.get_last_error())
+        try:
+            fd = msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_BINARY | os.O_NOINHERIT)
+        except BaseException:
+            CloseHandle(handle)
+            raise
+        return fd  # The CRT fd now owns the handle; os.close closes both.
+    finally:
+        LocalFree(descriptor)
 
 
 def no_reparse(path):

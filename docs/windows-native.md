@@ -65,7 +65,7 @@ launcher descendants. It cannot undo tokens already processed by the provider.
 | Runtime | `%LOCALAPPDATA%\gentle-stream\run`; XDG runtime/cache overrides remain supported |
 | Isolation | Runtime directory created atomically with a protected, current-user-only DACL; unsafe existing directories, owners, ACLs and reparse paths are refused, never silently repaired |
 | IPC | Per-user/per-runtime named pipe, authenticated with the existing random key; byte-framed JSON only, never pickle |
-| Key | Same `authkey` contract; inherits the private directory ACL and is checked before use |
+| Key | New 32-byte `authkey` created exclusively with an explicit current-user owner and protected user-only DACL at creation, using a noninheritable handle; existing keys are validated and reused, never repaired or replaced |
 | Singleton | Nonblocking Windows byte-range lock on `player.lock`; PID text is diagnostic, not termination authority |
 | Startup | One readiness JSON line over an anonymous stdout pipe; audio opens before ready; a temporary Job Object owns the whole venv-launcher tree until ready, and kills it on timeout/failure; failures are reported to the caller and `player.log` |
 | Recovery | OS releases a dead player's lock/pipe; next start reuses the private key, not a stale PID |

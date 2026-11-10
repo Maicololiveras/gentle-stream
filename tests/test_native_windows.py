@@ -12,6 +12,49 @@ import pytest
 from tests.test_daemon import runtime, run_ctl, wait_for
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows private file creation boundary")
+def test_windows_private_file_creation_contract(runtime, capsys):
+    import ctypes as C
+    from ctypes import wintypes as W
+    from gentle_stream import _windows_runtime as win, daemon, platform_runtime
+
+    paths = daemon.prepare()
+    target = runtime / "synthetic-private-file"
+    fd = win.create_private_file(target)
+    try:
+        assert not os.get_inheritable(fd)
+        os.write(fd, b"synthetic-only")
+    finally:
+        os.close(fd)
+    # Public validation checks the actual owner and every ACE, not POSIX mode bits.
+    platform_runtime.check_file(target)
+    owner, dacl, descriptor = W.LPVOID(), W.LPVOID(), W.LPVOID()
+    assert win.GetSecurity(str(target), 1, 5, C.byref(owner), None,
+                           C.byref(dacl), None, C.byref(descriptor)) == 0
+    try:
+        control, revision = W.WORD(), W.DWORD()
+        win.checked(win.GetControl(descriptor, C.byref(control), C.byref(revision)))
+        assert win.sid_string(owner) == win.user_sid()
+        assert control.value & 0x1000  # SE_DACL_PROTECTED at creation
+        assert dacl and C.cast(dacl, C.POINTER(win.ACL)).contents.count == 1
+        ace = W.LPVOID()
+        win.checked(win.GetAce(dacl, 0, C.byref(ace)))
+        assert C.cast(ace, C.POINTER(W.BYTE))[0] == 0  # ACCESS_ALLOWED_ACE
+        assert win.sid_string(ace.value + 8) == win.user_sid()
+    finally:
+        win.LocalFree(descriptor)
+    with pytest.raises(FileExistsError):
+        win.create_private_file(target)
+    assert target.read_bytes() == b"synthetic-only"
+    platform_runtime.check_file(target)
+    # The daemon uses the same creator and reuses its original 32 bytes.
+    key = daemon.authkey(paths)
+    assert len(key) == 32 and daemon.authkey(paths) == key
+    platform_runtime.check_file(paths.key)
+    assert sorted(p.name for p in runtime.iterdir()) == ["authkey", target.name]
+    assert capsys.readouterr() == ("", "")
+
+
 def test_cli_help_is_utf8_when_redirected(runtime, capsys):
     from gentle_stream import main
 

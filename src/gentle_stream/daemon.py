@@ -111,7 +111,11 @@ def prepare() -> Paths:
 def authkey(paths: Paths) -> bytes:
     """The shared key, created once (0600, never replaced while it exists)."""
     try:
-        fd = os.open(paths.key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        if platform_runtime.WINDOWS:
+            from ._windows_runtime import create_private_file
+            fd = create_private_file(paths.key)
+        else:
+            fd = os.open(paths.key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         platform_runtime.check_file(paths.key)
         return paths.key.read_bytes()
