@@ -1,8 +1,13 @@
-# Device-free CI on Linux, macOS and WSL
+# Device-free CI on Linux, macOS, WSL and native Windows
 
 [Tests](../.github/workflows/tests.yml) runs the locked Python 3.13 test suite on
-pull requests and pushes to `main`. It covers Linux, macOS and **Ubuntu running
-inside Windows Subsystem for Linux**, not native Windows Python. This is delivery
+pull requests and pushes to `main` or the exact WIP branch
+`ci/native-windows-support`. The first push to that branch runs the complete
+workflow, not only the native Windows job; no other branch push is added.
+It covers Linux, macOS and **Ubuntu running
+inside Windows Subsystem for Linux**. A separate native Windows job runs focused
+runtime, daemon/bridge, panic and named-playlist UI contracts without WSL, audio
+devices or a model. This is delivery
 configuration (risk item 5), not evidence that the hosted jobs have passed.
 
 ## What each job installs
@@ -11,19 +16,22 @@ configuration (risk item 5), not evidence that the hosted jobs have passed.
 | :--- | :--- | :--- |
 | Linux | `ubuntu-24.04` | APT `libportaudio2`; native uv 0.11.14 |
 | macOS | `macos-14` | Homebrew `portaudio`; native uv 0.11.14 |
+| Native Windows | `windows-latest` | Native uv 0.12.10, managed Python 3.13, Windows sounddevice wheel; focused runtime/bridge/panic/playlist contracts |
 | WSL | `windows-latest` | `setup-wsl` installs `Ubuntu-24.04`, WSL 2; APT `libportaudio2`, `python3-venv`, `ca-certificates`; Linux uv 0.11.14 in a bootstrap venv |
 
-All three install managed Python from `.python-version` (currently `3.13`) with
+The three POSIX jobs install managed Python from `.python-version` (currently `3.13`) with
 `uv python install`, then run `uv sync --locked`. The default `dev` group supplies
 pytest, pytest-asyncio and pyfluidsynth. `uv run --locked` refuses lockfile drift;
 CI never regenerates `uv.lock`. Python patch releases and OS package revisions
 can change: this is not a fully hermetic image.
 
-PortAudio is required even with fake streams: importing `sounddevice` can load
-its shared library before any fake output stream is constructed. CI checks the
-Python version and imports sounddevice/reports its PortAudio version before tests.
+The POSIX jobs check the Python version and import `sounddevice` to report its
+PortAudio version before tests. This requires the PortAudio shared library even
+with fake streams and can initialize the host audio backend. Native Windows
+instead inspects installed package versions with `importlib.metadata`, without
+importing `sounddevice` or `fluidsynth` or initializing devices during preflight.
 No audio device, audio server, Gentle Shell, provider account or credentials are
-required by these tests.
+required by the selected contracts; this is not an audio-backend health check.
 
 ## Test command and exact exclusions
 
@@ -44,7 +52,7 @@ uv run --locked pytest -k 'not test_genre_renders_cleanly_deterministically_and_
   Restore the gate once upstream provides a portable performance policy. Run it
   separately on suitable hardware with:
   `uv run --locked pytest tests/test_genres_contract.py::test_genre_renders_cleanly_deterministically_and_fast`.
-- **No platform-specific exclusions.** POSIX fake Windows-adapter/transport tests
+- **No platform-specific exclusions in the POSIX jobs.** POSIX fake Windows-adapter/transport tests
   still run on Linux, macOS and WSL. They do not require the hard-coded local
   Windows installations because their dependencies are mocked or relocated.
   Unknown failures must be investigated, not silently added to a skip list.
@@ -59,6 +67,47 @@ uv run --locked pytest -k 'not test_genre_renders_cleanly_deterministically_and_
 This selection is the explicit difference from the full-suite request in
 [upstream #2](https://github.com/Gentleman-Programming/gentle-stream/issues/2).
 It does not establish a full-suite green result.
+
+## Native Windows contracts and isolation
+
+The separate `windows-native` job uses PowerShell and native Python (`sys.platform`
+must be `win32`). It never installs or invokes WSL. A unique directory under
+`RUNNER_TEMP` holds managed Python, the venv, caches, HOME/USERPROFILE, XDG state
+and TEMP/TMP. `GENTLE_STREAM_TEST_TEMP` routes retained fake-daemon fixtures there;
+pytest's cache and temporary files are also outside the checkout. Runner disposal,
+not fixture deletion, reclaims these files.
+
+Dependencies are installed with:
+
+```text
+uv sync --python 3.13 --frozen --no-install-project --no-build
+```
+
+The metadata-only preflight asserts native Windows and Python 3.13, then reports
+installed `sounddevice`, `pyfluidsynth` and `pytest` distribution versions. It also
+asserts that their audio modules were not imported; it does not load PortAudio or
+check device availability. With `PYTHONPATH=src`, the job checks
+`python -m gentle_stream --help` and runs this exact PowerShell command (`$python`
+is the scratch venv's interpreter):
+
+```powershell
+& $python -m pytest -q tests/test_native_windows.py tests/test_daemon.py tests/test_bridge.py tests/test_voice_bridge.py tests/test_music_panic.py tests/test_named_playlist_ui.py -o "cache_dir=$scratch/pytest-cache" --basetemp="$scratch/pytest-temp"
+```
+
+Only genuinely POSIX assertions (mode bits/Unix socket inodes and catchable Unix
+signals) skip on Windows. Native tests still exercise the actual daemon process,
+startup readiness, singleton lock, authenticated JSON IPC, attach, stale recovery,
+controls, stop and owned model-tree timeout/cancel. The bridge fixture uses Python
+instead of a POSIX shebang on Windows, retaining its argv/output/error assertions.
+The panic and named-playlist UI modules cover fake-output restart/recovery,
+settings preservation and playlist UI behavior. These are the same six modules
+previously verified independently (109 native Windows / 107 Linux passes), not
+`tests/test_app.py` or a newly executed hosted run. No real output device, Gentle
+Shell or provider is used. This is intentionally **not a native full-suite claim**;
+broader native suite compatibility is a separate gate. This candidate has no
+Actions run yet; local syntax/structure/smoke checks do not meet the requirement
+for native Windows hosted CI before delivery. Pull-request and push-to-`main`
+behavior is unchanged; the exact WIP branch push trigger is additive.
 
 ## WSL paths and isolation
 
@@ -80,7 +129,7 @@ assumption that arbitrary Windows environment variables cross into WSL.
 Each job creates its own system `/tmp/gs-ci-XXXXXX` scratch directory. Config,
 cache, runtime socket root, managed Python and the project venv go there;
 `PYTEST_ADDOPTS` puts pytest's cache there too. The existing daemon tests use their
-own short `/tmp/gs-*` roots and fake audio streams with fixture cleanup. This keeps
+own short `/tmp/gs-*` roots and fake audio streams; daemon fixture logs are retained. This keeps
 AF_UNIX paths short on macOS as well. Runner disposal reclaims CI scratch after
 the job; the workflow performs no temp deletion and uploads no artifacts.
 Do not run this provisioning script on a personal machine: it is designed for
@@ -91,9 +140,11 @@ isolated test runner, never a live music session.
 
 - Repository token permissions are only `contents: read`; checkout disables
   credential persistence. No secrets, custom tokens, publishing or write-back.
-- Only `pull_request` and `push` to `main`; no privileged `pull_request_target`,
+- Only `pull_request` and `push` to `main` or the exact WIP branch
+  `ci/native-windows-support`; no privileged `pull_request_target`,
   self-hosted runner, environment approvals or ad-hoc downloaded scripts.
-- Exactly three matrix jobs, maximum parallelism three, 30 minutes per job.
+- Three POSIX matrix jobs, maximum matrix parallelism three, 30 minutes per job;
+  one separate native Windows job with a 15-minute limit.
   `fail-fast: false` retains evidence from each platform; it does not forgive errors.
 - Workflow concurrency cancels obsolete runs for the same PR/ref. There is no
   cross-run persistent dependency/distribution cache.
@@ -129,8 +180,8 @@ pins do not pin every transitive action dependency, OS package or Python downloa
 ## What a green run would not prove
 
 Local YAML/structure checks cannot launch or validate hosted GitHub runners.
-**The initial Linux, macOS and Windows-hosted WSL runs remain unverified.** Verify
-all three on the actual PR, including runner availability, WSL distribution/kernel
+**Hosted Linux, macOS, Windows-hosted WSL and native Windows runs remain unverified.** Verify
+all four on the actual PR, including runner availability, WSL distribution/kernel
 installation, translated working directory and locked wheel availability. An
 unavailable hosted WSL environment must fail visibly, not fall back to Linux-only
 or Windows-native Python under a WSL label.
@@ -145,7 +196,7 @@ and [integrated voice](integrated-voice.md) for separate manual prerequisites.
 
 ### Review checklist
 
-- Confirm all three hosted jobs appear and actually execute on their named OS.
+- Confirm all four hosted jobs appear and actually execute on their named OS.
 - Read setup output and pytest's deselected/skipped counts, not only the green badge.
 - Investigate every failure other than the explicitly deselected issue #3 function.
 - Keep manual audio/provider/Windows interop evidence separate from CI status.
