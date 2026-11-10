@@ -15,7 +15,7 @@ configuration (risk item 5), not evidence that the hosted jobs have passed.
 | Job | Hosted runner | Setup |
 | :--- | :--- | :--- |
 | Linux | `ubuntu-24.04` | APT `libportaudio2`; native uv 0.11.14 |
-| macOS | `macos-14` | Homebrew `portaudio`; native uv 0.11.14 |
+| macOS | `macos-15` | Homebrew `portaudio`; native uv 0.11.14 |
 | Native Windows | `windows-latest` | Native uv 0.12.10, managed Python 3.13, Windows sounddevice wheel; focused runtime/bridge/panic/playlist contracts |
 | WSL | `windows-latest` | `setup-wsl` installs `Ubuntu-24.04`, WSL 2; APT `libportaudio2`, `python3-venv`, `ca-certificates`; Linux uv 0.11.14 in a bootstrap venv |
 
@@ -179,10 +179,10 @@ pins do not pin every transitive action dependency, OS package or Python downloa
 
 ## What a green run would not prove
 
-Local YAML/structure checks cannot launch or validate hosted GitHub runners.
-**Hosted Linux, macOS, Windows-hosted WSL and native Windows runs remain unverified.** Verify
-all four on the actual PR, including runner availability, WSL distribution/kernel
-installation, translated working directory and locked wheel availability. An
+Local YAML/structure checks do not establish hosted GitHub runner success. Verify
+Linux, macOS, Windows-hosted WSL and native Windows for the exact candidate commit,
+including runner availability, WSL distribution/kernel installation, translated
+working directory and locked wheel availability. An
 unavailable hosted WSL environment must fail visibly, not fall back to Linux-only
 or Windows-native Python under a WSL label.
 
