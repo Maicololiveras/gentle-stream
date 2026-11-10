@@ -1,6 +1,8 @@
 import json
 import os
 import stat
+import subprocess
+import sys
 import textwrap
 
 import pytest
@@ -35,7 +37,7 @@ def text(t):
 
 
 @pytest.fixture
-def fake(tmp_path):
+def fake(tmp_path, monkeypatch):
     """A fake gentle-shell: records its argv and prints FAKE_STDOUT / FAKE_STDERR, exiting with FAKE_CODE."""
     log = tmp_path / "argv.json"
     script = tmp_path / "gentle-shell"
@@ -49,6 +51,11 @@ def fake(tmp_path):
         sys.exit(int(os.environ.get("FAKE_CODE", "0")))
         """))
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    if os.name == "nt":
+        original = subprocess.Popen
+        def launch(argv, **kw):
+            return original([sys.executable, str(script), *argv[1:]], **kw)
+        monkeypatch.setattr(subprocess, "Popen", launch)
 
     def run(stdout="", stderr="", code=0, sleep=0):
         os.environ.update(FAKE_STDOUT=stdout, FAKE_STDERR=stderr, FAKE_CODE=str(code), FAKE_SLEEP=str(sleep))

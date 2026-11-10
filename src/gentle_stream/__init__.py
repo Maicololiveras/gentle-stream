@@ -39,7 +39,11 @@ background playback:
   (status prints one JSON line with underruns, output_underflows and buffered_seconds;
    diagnostics are null with older players; the others exit 1 when nothing is playing).
 
-optional native Windows audio (WSL only):
+native Windows (no WSL):
+  run with Python 3.13+ and the default sounddevice output; no FFplay is needed.
+  native executable or direct .mjs Gentle Shell launcher; see docs/windows-native.md.
+
+optional Windows audio bridge (WSL only):
   GENTLE_STREAM_AUDIO_OUTPUT=windows gentle-stream streams live PCM to Windows FFplay.
   sounddevice remains the default. Stop an existing player before selecting a different output.
   See docs/windows-wsl.md for Windows Python/FFplay paths and diagnostics.
@@ -120,6 +124,12 @@ def ctl(action: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows consoles use UTF-8, but redirected Python output otherwise uses
+    # the legacy ANSI code page, which cannot represent the documented controls.
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["daemon"]:   # the background player, started by the TUI; not listed in --help
         from .daemon import main as daemon_main

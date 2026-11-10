@@ -12,7 +12,7 @@
 <p>
 <img src="https://img.shields.io/badge/Python-3.13-F095C8?style=for-the-badge&labelColor=1A1218" alt="Python 3.13">
 <img src="https://img.shields.io/badge/genres-16-F095C8?style=for-the-badge&labelColor=1A1218" alt="10 genres">
-<img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Platform: macOS · Linux">
+<img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Platform: macOS · Linux · Windows">
 <a href="LICENSE"><img src="https://img.shields.io/badge/MIT-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
 </p>
 
@@ -114,7 +114,7 @@ Only describing a mood calls a model. The status line shows what that call used,
 | An audio output device | Playback goes through PortAudio (`sounddevice`); on Linux install your distro's PortAudio package (for example `libportaudio2`) |
 | FluidSynth *(optional)* | Only for sampled instruments: `brew install fluid-synth` or your system's `fluidsynth` package |
 
-**Audio libraries:** On Ubuntu/Debian, install `libportaudio2` with your package manager; on macOS, install `portaudio` with Homebrew. These are platform libraries, not Python packages. Windows users should run the supported app inside WSL rather than invoke the Unix-only daemon with native Windows Python. See [Windows/WSL setup](docs/windows-wsl.md) for the optional native Windows output path and its separate FFplay/Python requirements.
+**Audio libraries:** On Ubuntu/Debian, install `libportaudio2` with your package manager; on macOS, install `portaudio` with Homebrew. These are platform libraries, not Python packages. **Windows can run directly without WSL**, using Python 3.13+ and the default sounddevice output (Windows wheels include PortAudio). See [Native Windows setup](docs/windows-native.md) for PowerShell commands and safe Gentle Shell launcher selection. [Windows/WSL setup](docs/windows-wsl.md) remains an alternative with an optional WSL-to-FFplay output path.
 
 **Install as a command**
 
@@ -259,7 +259,7 @@ Both counters are cumulative since the current background player (daemon) starte
 
 An older running daemon cannot supply these fields: the updated client reports them as JSON `null` (unknown, not zero). They become available after that daemon is stopped and a new one starts. When no player is running, status remains just `{"running": false}`.
 
-The player listens on a Unix socket in a private directory (`$XDG_RUNTIME_DIR/gentle-stream`, default `~/.cache/gentle-stream/run`, mode `0700`), authenticated with a random key in a `0600` file. A player that crashed is detected and replaced on the next start. If the audio output cannot be opened, `gentle-stream` prints the error and exits with `1`.
+On native Windows, the player uses an authenticated JSON named pipe, a current-user-only ACL-protected runtime directory and a Windows file lock; see [Native Windows](docs/windows-native.md#runtime-and-security). On POSIX, the player listens on a Unix socket in a private directory (`$XDG_RUNTIME_DIR/gentle-stream`, default `~/.cache/gentle-stream/run`, mode `0700`), authenticated with a random key in a `0600` file. A player that crashed is detected and replaced on the next start. If the audio output cannot be opened, `gentle-stream` prints the error and exits with `1`.
 
 <div align="right"><a href="#top">Back to top</a></div>
 
@@ -394,7 +394,7 @@ All music is generated: the composer builds every melody, counter-melody, bass l
 uv run pytest
 ```
 
-The suite needs no audio device and no Gentle Shell: the player and the TUI are tested with a fake output stream and a fake shell. When the soundfont is installed, the player and app tests run on the sampled backend. [CI on Linux, macOS and WSL](docs/ci.md) uses the locked Python 3.13 environment and documents its exact hardware-sensitive exclusion; CI is not a substitute for the full local command or a real audio-device check.
+The suite needs no audio device and no Gentle Shell: the player and the TUI are tested with a fake output stream and a fake shell. When the soundfont is installed, the player and app tests run on the sampled backend. [CI on Linux, macOS, WSL and native Windows](docs/ci.md) uses the locked Python 3.13 environment; native Windows runs focused daemon/bridge contracts, while the POSIX jobs run the broader suite with its documented hardware-sensitive exclusion. CI is not a substitute for the full local command or a real audio-device check.
 
 <div align="right"><a href="#top">Back to top</a></div>
 
